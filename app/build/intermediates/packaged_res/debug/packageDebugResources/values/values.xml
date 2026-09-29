@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="ember_ember">#FFE2553D</color>
+    <color name="ember_ink">#FF0B0B10</color>
+    <string name="app_name">Ember</string>
+    <style name="Theme.Ember" parent="android:Theme.Material.NoActionBar">
+        <item name="android:statusBarColor">@android:color/transparent</item>
+        <item name="android:navigationBarColor">@android:color/transparent</item>
+        <item name="android:windowBackground">@color/ember_ink</item>
+    </style>
+</resources>

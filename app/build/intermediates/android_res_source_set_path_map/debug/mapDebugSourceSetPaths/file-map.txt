@@ -1,0 +1,7 @@
+com.ember.companion.app-pngs-0 /data/data/com.termux/files/home/Ember/app/build/generated/res/pngs/debug
+com.ember.companion.app-updated_navigation_xml-1 /data/data/com.termux/files/home/Ember/app/build/generated/updated_navigation_xml/debug
+com.ember.companion.app-packageDebugResources-2 /data/data/com.termux/files/home/Ember/app/build/intermediates/incremental/debug/packageDebugResources/merged.dir
+com.ember.companion.app-packageDebugResources-3 /data/data/com.termux/files/home/Ember/app/build/intermediates/incremental/debug/packageDebugResources/stripped.dir
+com.ember.companion.app-debug-4 /data/data/com.termux/files/home/Ember/app/build/intermediates/merged_res/debug/mergeDebugResources
+com.ember.companion.app-debug-5 /data/data/com.termux/files/home/Ember/app/src/debug/res
+com.ember.companion.app-main-6 /data/data/com.termux/files/home/Ember/app/src/main/res

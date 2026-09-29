@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="com.ember.companion.core.Milestone1ChallengerStressTest" tests="17" skipped="0" failures="0" errors="0" timestamp="2026-09-27T10:05:13.465Z" hostname="localhost" time="0.024">
+  <properties/>
+  <testcase name="BriefMarkdownParser cleanValue aggressively strips duplicate and multi-layer prefixes" classname="com.ember.companion.core.Milestone1ChallengerStressTest" time="0.003"/>
+  <testcase name="OpenAI temperature bounds clamp below 0 and above 2" classname="com.ember.companion.core.Milestone1ChallengerStressTest" time="0.001"/>
+  <testcase name="Dials summary safely handles out-of-range dial indices" classname="com.ember.companion.core.Milestone1ChallengerStressTest" time="0.0"/>
+  <testcase name="Anthropic temperature bounds clamp between 0 and 1 strictly" classname="com.ember.companion.core.Milestone1ChallengerStressTest" time="0.0"/>
+  <testcase name="system prompt generation at token limit 0 selects concise budget without error" classname="com.ember.companion.core.Milestone1ChallengerStressTest" time="0.001"/>
+  <testcase name="cleanFirstMessage handles messy fences, preambles, and chatter" classname="com.ember.companion.core.Milestone1ChallengerStressTest" time="0.002"/>
+  <testcase name="BriefMarkdownParser replacePartSafely rejects blank replacement or missing keys" classname="com.ember.companion.core.Milestone1ChallengerStressTest" time="0.003"/>
+  <testcase name="BriefMarkdownParser handles completely blank, corrupt, or headerless input gracefully" classname="com.ember.companion.core.Milestone1ChallengerStressTest" time="0.003"/>
+  <testcase name="reasoning models omit temperature and substitute max_completion_tokens" classname="com.ember.companion.core.Milestone1ChallengerStressTest" time="0.003"/>
+  <testcase name="system prompt generation at threshold boundaries 350, 351, 1000, 1001" classname="com.ember.companion.core.Milestone1ChallengerStressTest" time="0.001"/>
+  <testcase name="system prompt custom parameters handle null, blank, and bespoke values" classname="com.ember.companion.core.Milestone1ChallengerStressTest" time="0.003"/>
+  <testcase name="reasoning model detector handles case variation and model prefixes" classname="com.ember.companion.core.Milestone1ChallengerStressTest" time="0.001"/>
+  <testcase name="standard OpenAI models retain temperature, max_tokens, and system role" classname="com.ember.companion.core.Milestone1ChallengerStressTest" time="0.0"/>
+  <testcase name="Gemini temperature bounds clamp between 0 and 2" classname="com.ember.companion.core.Milestone1ChallengerStressTest" time="0.0"/>
+  <testcase name="system prompt generation at token limit 4000 selects expansive blueprint budget" classname="com.ember.companion.core.Milestone1ChallengerStressTest" time="0.001"/>
+  <testcase name="system prompt generation at token limit 50 selects concise budget" classname="com.ember.companion.core.Milestone1ChallengerStressTest" time="0.001"/>
+  <testcase name="cleanMesExample guarantees START tag and cleans commentary" classname="com.ember.companion.core.Milestone1ChallengerStressTest" time="0.0"/>
+  <system-out><![CDATA[]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>

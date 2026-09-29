@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="com.ember.companion.core.AiResponseParsingTest" tests="22" skipped="0" failures="0" errors="0" timestamp="2026-09-27T10:05:13.317Z" hostname="localhost" time="0.132">
+  <properties/>
+  <testcase name="placeholder words never count as answers" classname="com.ember.companion.core.AiResponseParsingTest" time="0.015"/>
+  <testcase name="anthropic keeps only text blocks" classname="com.ember.companion.core.AiResponseParsingTest" time="0.068"/>
+  <testcase name="reasoning models fall back to reasoning content" classname="com.ember.companion.core.AiResponseParsingTest" time="0.0"/>
+  <testcase name="gemini request serializer generationConfig includes temperature and maxOutputTokens" classname="com.ember.companion.core.AiResponseParsingTest" time="0.011"/>
+  <testcase name="anthropic request serializer includes temperature and claude-3-5-sonnet default" classname="com.ember.companion.core.AiResponseParsingTest" time="0.001"/>
+  <testcase name="system prompt format instructions direct markdown and suppress chatter" classname="com.ember.companion.core.AiResponseParsingTest" time="0.006"/>
+  <testcase name="openai reasoning models use max_completion_tokens instead of max_tokens" classname="com.ember.companion.core.AiResponseParsingTest" time="0.004"/>
+  <testcase name="content sent as an array of parts is joined" classname="com.ember.companion.core.AiResponseParsingTest" time="0.0"/>
+  <testcase name="anthropic model sanitization replaces claude-sonnet-5 with claude-3-5-sonnet" classname="com.ember.companion.core.AiResponseParsingTest" time="0.005"/>
+  <testcase name="markdown parser graceful fallback on completely unformatted narrative prose" classname="com.ember.companion.core.AiResponseParsingTest" time="0.001"/>
+  <testcase name="the exact payload that displayed as null is now rejected" classname="com.ember.companion.core.AiResponseParsingTest" time="0.0"/>
+  <testcase name="markdown scenario parser handles conversational preambles and fences" classname="com.ember.companion.core.AiResponseParsingTest" time="0.001"/>
+  <testcase name="markdown scenario parser parses full standard response into structured slots" classname="com.ember.companion.core.AiResponseParsingTest" time="0.008"/>
+  <testcase name="a normal answer still passes through untouched" classname="com.ember.companion.core.AiResponseParsingTest" time="0.001"/>
+  <testcase name="a real sentence is not mistaken for a placeholder" classname="com.ember.companion.core.AiResponseParsingTest" time="0.0"/>
+  <testcase name="refusal text is recovered from the sibling field" classname="com.ember.companion.core.AiResponseParsingTest" time="0.001"/>
+  <testcase name="non text parts are skipped" classname="com.ember.companion.core.AiResponseParsingTest" time="0.0"/>
+  <testcase name="reasoning model detection correctly identifies o1 and o3 models" classname="com.ember.companion.core.AiResponseParsingTest" time="0.001"/>
+  <testcase name="system prompt budget scaling scales with maxTokens bounds" classname="com.ember.companion.core.AiResponseParsingTest" time="0.003"/>
+  <testcase name="json null is absent, not the string null" classname="com.ember.companion.core.AiResponseParsingTest" time="0.001"/>
+  <testcase name="openai request serializer includes temperature and max_tokens for standard models" classname="com.ember.companion.core.AiResponseParsingTest" time="0.0"/>
+  <testcase name="gemini joins parts and ignores nulls" classname="com.ember.companion.core.AiResponseParsingTest" time="0.001"/>
+  <system-out><![CDATA[]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>

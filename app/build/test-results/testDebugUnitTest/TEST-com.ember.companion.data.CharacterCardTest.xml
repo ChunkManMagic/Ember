@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="com.ember.companion.data.CharacterCardTest" tests="29" skipped="0" failures="0" errors="0" timestamp="2026-09-27T10:05:13.594Z" hostname="localhost" time="0.249">
+  <properties/>
+  <testcase name="every platform declares a spec and a format" classname="com.ember.companion.data.CharacterCardTest" time="0.015"/>
+  <testcase name="a png with no card data fails with a readable reason" classname="com.ember.companion.data.CharacterCardTest" time="0.004"/>
+  <testcase name="a charx without card json fails cleanly" classname="com.ember.companion.data.CharacterCardTest" time="0.017"/>
+  <testcase name="v3 group_only_greetings is present even when empty" classname="com.ember.companion.data.CharacterCardTest" time="0.001"/>
+  <testcase name="chub swaps description and personality" classname="com.ember.companion.data.CharacterCardTest" time="0.0"/>
+  <testcase name="v1 json is flat with no spec envelope" classname="com.ember.companion.data.CharacterCardTest" time="0.001"/>
+  <testcase name="a custom mapping uses the user's own field names" classname="com.ember.companion.data.CharacterCardTest" time="0.008"/>
+  <testcase name="platforms without an import endpoint are marked copy only" classname="com.ember.companion.data.CharacterCardTest" time="0.001"/>
+  <testcase name="png export carries both chunks" classname="com.ember.companion.data.CharacterCardTest" time="0.071"/>
+  <testcase name="png is a structurally valid png" classname="com.ember.companion.data.CharacterCardTest" time="0.002"/>
+  <testcase name="a v2 card round trips through json" classname="com.ember.companion.data.CharacterCardTest" time="0.001"/>
+  <testcase name="extensions survive a json round trip" classname="com.ember.companion.data.CharacterCardTest" time="0.0"/>
+  <testcase name="character ai applies the documented field caps" classname="com.ember.companion.data.CharacterCardTest" time="0.001"/>
+  <testcase name="a brief becomes a card with a name and a body" classname="com.ember.companion.data.CharacterCardTest" time="0.002"/>
+  <testcase name="a custom mapping can emit arrays for greetings and tags" classname="com.ember.companion.data.CharacterCardTest" time="0.0"/>
+  <testcase name="a truncated png does not throw" classname="com.ember.companion.data.CharacterCardTest" time="0.003"/>
+  <testcase name="png chunk crc values are correct" classname="com.ember.companion.data.CharacterCardTest" time="0.002"/>
+  <testcase name="v3 dates are written in seconds" classname="com.ember.companion.data.CharacterCardTest" time="0.001"/>
+  <testcase name="hidden title parts stay out of the card" classname="com.ember.companion.data.CharacterCardTest" time="0.001"/>
+  <testcase name="a charx archive round trips" classname="com.ember.companion.data.CharacterCardTest" time="0.003"/>
+  <testcase name="garbage input fails cleanly" classname="com.ember.companion.data.CharacterCardTest" time="0.002"/>
+  <testcase name="png round trips and ccv3 wins" classname="com.ember.companion.data.CharacterCardTest" time="0.05"/>
+  <testcase name="v2 json has the spec envelope and the required keys" classname="com.ember.companion.data.CharacterCardTest" time="0.001"/>
+  <testcase name="a v2-only png still reads" classname="com.ember.companion.data.CharacterCardTest" time="0.055"/>
+  <testcase name="agnai blanks personality" classname="com.ember.companion.data.CharacterCardTest" time="0.001"/>
+  <testcase name="v3 includes the fields v2 lacks" classname="com.ember.companion.data.CharacterCardTest" time="0.001"/>
+  <testcase name="personality is a short trait summary and never the whole body" classname="com.ember.companion.data.CharacterCardTest" time="0.001"/>
+  <testcase name="a flat v1 card is read as v1" classname="com.ember.companion.data.CharacterCardTest" time="0.0"/>
+  <testcase name="a blank target name is skipped" classname="com.ember.companion.data.CharacterCardTest" time="0.0"/>
+  <system-out><![CDATA[]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>
