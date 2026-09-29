@@ -1,0 +1,46 @@
+# Build outputs
+/build/
+/app/build/
+*.apk
+*.aar
+
+# Gradle
+.gradle/
+.gradle/
+!gradle/wrapper/gradle-wrapper.jar
+!gradle/wrapper/gradle-wrapper.properties
+.gradle/
+build/
+*.iml
+.idea/
+
+# Local config
+local.properties
+*.keystore
+*.jks
+
+# IDE
+.idea/
+*.iml
+*.iws
+*.ipr
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Build outputs
+*.apk
+*.ap_
+*.dex
+
+# Kotlin
+*.kt~
+*.kt~
+
+# Temporary
+*.tmp
+*.temp
+*.log
