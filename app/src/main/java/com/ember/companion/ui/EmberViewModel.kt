@@ -999,7 +999,7 @@ fun saveVeniceImage(context: android.content.Context) {
                         mimeType = effectiveMime,
                         state = DownloadState.QUEUED,
                     )
-                    startDownloadPolling(context)
+                    startDownloadPolling()
                     showMessage("Queued $fileName")
                 },
                 onFailure = {
