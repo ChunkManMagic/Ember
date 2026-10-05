@@ -1,3 +1,6 @@
+import java.time.LocalDateTime
+import java.time.format.DateTimeFormatter
+
 plugins {
   alias(libs.plugins.android.application)
   alias(libs.plugins.kotlin.compose)
@@ -5,7 +8,15 @@ plugins {
   alias(libs.plugins.kotlin.serialization)
 }
 
+// Stamped per build, so two APKs are never confused with each other.
+val buildStamp: String =
+    LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm"))
+
 android {
+  buildFeatures {
+    buildConfig = true
+  }
+
   namespace = "com.ember.companion"
   compileSdk = 37
 
@@ -15,6 +26,8 @@ android {
     targetSdk = 34
     versionCode = 1
     versionName = "1.0"
+    // Shown in Settings so a stale install can be told apart from a live bug.
+    buildConfigField("String", "BUILD_STAMP", "\"$buildStamp\"")
   }
 
   buildTypes {
