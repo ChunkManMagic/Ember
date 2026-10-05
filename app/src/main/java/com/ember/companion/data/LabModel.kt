@@ -96,6 +96,8 @@ data class Brief(
     fun withSlot(updated: BriefSlot): Brief =
         copy(slots = slots.map { if (it.key == updated.key) updated else it })
 
+    fun withTitle(newTitle: String): Brief = copy(title = newTitle.trim())
+
     fun withPart(key: String, transform: (Part) -> Part): Brief {
         var found = false
         val next = slots.map { slot ->
@@ -106,6 +108,30 @@ data class Brief(
             }
         }
         return if (found) copy(slots = next) else this
+    }
+
+    fun withPartValue(key: String, value: String): Brief =
+        withPart(key) { it.copy(value = value) }
+
+    fun withPartLabelAndValue(key: String, label: String, value: String): Brief =
+        withPart(key) { it.copy(label = label, value = value) }
+
+    fun withPartRemoved(key: String): Brief {
+        val next = slots.map { slot ->
+            slot.copy(parts = slot.parts.filter { it.key != key })
+        }
+        return copy(slots = next)
+    }
+
+    fun withPartAdded(slotKey: String, part: Part): Brief {
+        val next = slots.map { slot ->
+            if (slot.key == slotKey) {
+                slot.copy(parts = slot.parts + part)
+            } else {
+                slot
+            }
+        }
+        return copy(slots = next)
     }
 
     /** Flattened view used for persistence and the AI context. */

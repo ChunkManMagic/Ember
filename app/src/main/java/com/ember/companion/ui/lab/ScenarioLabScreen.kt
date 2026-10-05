@@ -18,24 +18,31 @@ import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.lazy.LazyListScope
+import androidx.compose.runtime.rememberCoroutineScope
+import kotlinx.coroutines.launch
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Checklist
 import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.Block
 import androidx.compose.material.icons.filled.Bookmark
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.ExpandLess
 import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.FavoriteBorder
 import androidx.compose.material.icons.filled.LibraryBooks
+import androidx.compose.material.icons.filled.Lightbulb
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.LockOpen
 import androidx.compose.material.icons.filled.MenuBook
@@ -53,8 +60,10 @@ import com.ember.companion.ui.LabViewMode
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.AssistChip
 import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
@@ -116,6 +125,8 @@ fun ScenarioLabScreen(vm: EmberViewModel, contentPadding: PaddingValues) {
     val aiHasKey by vm.aiHasKey.collectAsStateWithLifecycle()
     val labViewMode by vm.labViewMode.collectAsStateWithLifecycle()
     val steeringExpanded by vm.steeringExpanded.collectAsStateWithLifecycle()
+    val smartRerollBusyKey by vm.smartRerollBusyKey.collectAsStateWithLifecycle()
+    val partVariations by vm.partVariations.collectAsStateWithLifecycle()
 
     var mode by remember { mutableStateOf(Mode.GENERATE) }
     var saveDialog by remember { mutableStateOf(false) }
@@ -123,6 +134,10 @@ fun ScenarioLabScreen(vm: EmberViewModel, contentPadding: PaddingValues) {
     var banksDialog by remember { mutableStateOf(false) }
     var showCardExport by remember { mutableStateOf(false) }
     var showCardImport by remember { mutableStateOf(false) }
+    var showPlatformFields by remember { mutableStateOf(false) }
+    var editingPart by remember { mutableStateOf<Part?>(null) }
+    var editingTitle by remember { mutableStateOf(false) }
+    var addingPartSlotKey by remember { mutableStateOf<String?>(null) }
     val screen by vm.currentScreen.collectAsStateWithLifecycle()
     if (screen == "platformHelper") {
         PlatformSelectionScreen(vm)
@@ -181,9 +196,16 @@ fun ScenarioLabScreen(vm: EmberViewModel, contentPadding: PaddingValues) {
                     vm = vm,
                     aiEnabled = aiEnabled,
                     aiHasKey = aiHasKey,
+                    labViewMode = labViewMode,
+                    smartRerollBusyKey = smartRerollBusyKey,
                     onSave = { saveDialog = true },
                     onExportCard = { showCardExport = true },
                     onImportCard = { showCardImport = true },
+                    onPlatformFields = { showPlatformFields = true },
+                    onExportPersonaForge = { vm.openInPersonaForgeDirect() },
+                    onEditPart = { editingPart = it },
+                    onEditTitle = { editingTitle = true },
+                    onAddPart = { addingPartSlotKey = it },
                 )
                 Mode.GENERATE -> GeneratePane(
                     vm = vm,
@@ -191,11 +213,16 @@ fun ScenarioLabScreen(vm: EmberViewModel, contentPadding: PaddingValues) {
                     aiEnabled = aiEnabled,
                     aiHasKey = aiHasKey,
                     labViewMode = labViewMode,
+                    smartRerollBusyKey = smartRerollBusyKey,
                     steeringExpanded = steeringExpanded,
                     onSave = { saveDialog = true },
                     onExportCard = { showCardExport = true },
                     onImportCard = { showCardImport = true },
-                    onExportPersonaForge = { vm.exportScenarioToPersonaForge() },
+                    onPlatformFields = { showPlatformFields = true },
+                    onExportPersonaForge = { vm.openInPersonaForgeDirect() },
+                    onEditPart = { editingPart = it },
+                    onEditTitle = { editingTitle = true },
+                    onAddPart = { addingPartSlotKey = it },
                 )
 
                 Mode.LIBRARY -> LibraryPane(
@@ -249,12 +276,70 @@ fun ScenarioLabScreen(vm: EmberViewModel, contentPadding: PaddingValues) {
         BanksDialog(vm = vm, custom = lab.customBanks, onDismiss = { banksDialog = false })
     }
 
+    if (showPlatformFields) {
+        PlatformFieldsDialog(vm = vm, onDismiss = { showPlatformFields = false })
+    }
+
     if (showCardExport) {
         CardExportDialog(vm = vm, onDismiss = { showCardExport = false })
     }
 
     if (showCardImport) {
         CardImportDialog(vm = vm, onDismiss = { showCardImport = false })
+    }
+
+    editingPart?.let { part ->
+        EditPartDialog(
+            part = part,
+            vm = vm,
+            onDismiss = { editingPart = null },
+            onSave = { label, value ->
+                vm.updatePart(part.key, label, value)
+                editingPart = null
+            },
+            onSmartReroll = {
+                vm.smartRerollPart(part.key)
+                editingPart = null
+            },
+            onVariations = {
+                val key = part.key
+                editingPart = null
+                vm.requestPartVariations(key)
+            },
+        )
+    }
+
+    if (editingTitle && lab.brief != null) {
+        EditTitleDialog(
+            currentTitle = lab.brief!!.title,
+            onDismiss = { editingTitle = false },
+            onSave = { newTitle ->
+                vm.updateBriefTitle(newTitle)
+                editingTitle = false
+            },
+        )
+    }
+
+    addingPartSlotKey?.let { slotKey ->
+        val slot = lab.brief?.slot(slotKey)
+        AddPartDialog(
+            slotHeading = slot?.heading ?: "Section",
+            onDismiss = { addingPartSlotKey = null },
+            onAdd = { label, value ->
+                vm.addPartToSlot(slotKey, label, value)
+                addingPartSlotKey = null
+            },
+        )
+    }
+
+    partVariations?.let { variations ->
+        PartVariationsDialog(
+            variations = variations,
+            onDismiss = { vm.dismissPartVariations() },
+            onSelect = { selectedOption ->
+                vm.selectPartVariation(variations.partKey, selectedOption)
+            },
+        )
     }
 }
 
@@ -403,18 +488,26 @@ private fun BuilderPane(
     vm: EmberViewModel,
     aiEnabled: Boolean,
     aiHasKey: Boolean,
+    labViewMode: LabViewMode,
+    smartRerollBusyKey: String?,
     onSave: () -> Unit,
     onExportCard: () -> Unit,
     onImportCard: () -> Unit,
+    onPlatformFields: () -> Unit,
+    onExportPersonaForge: () -> Unit,
+    onEditPart: (Part) -> Unit,
+    onEditTitle: () -> Unit,
+    onAddPart: (String) -> Unit,
 ) {
     val context = LocalContext.current
     val lab by vm.lab.collectAsStateWithLifecycle()
+    val pfBusy by vm.personaForgeAiBusy.collectAsStateWithLifecycle()
     var prompt by remember { mutableStateOf("") }
     var formatExpanded by remember { mutableStateOf(false) }
-    var formatOption by remember { mutableStateOf("Full Scenario") }
+    var formatOption by remember { mutableStateOf("PersonaForge Scenario") }
     var customFormat by remember { mutableStateOf("") }
     
-    val formatOptions = listOf("Full Scenario", "Character Card", "Story Beat", "Worldbuilding Lore", "Custom...")
+    val formatOptions = listOf("PersonaForge Scenario", "Full Scenario", "Character Card", "Story Beat", "Worldbuilding Lore", "Custom...")
     
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
@@ -431,7 +524,7 @@ private fun BuilderPane(
                     Spacer(Modifier.height(4.dp))
                     Text(
                         "Describe what you want to create and let AI build the structure for you. " +
-                        "Once generated, you can save, refine, or export it.",
+                        "Once generated, you can directly edit, refine, or export it.",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
@@ -483,17 +576,83 @@ private fun BuilderPane(
                     }
                     
                     Spacer(Modifier.height(12.dp))
-                    Button(
-                        onClick = { 
-                            val finalTone = if (formatOption == "Custom...") customFormat else formatOption
-                            vm.generateAiScenario(premise = prompt, tone = finalTone) 
-                        },
-                        enabled = aiEnabled && aiHasKey && !lab.aiBusy && prompt.isNotBlank(),
-                        modifier = Modifier.fillMaxWidth(),
-                    ) {
-                        Icon(Icons.Filled.AutoAwesome, null, Modifier.size(17.dp))
-                        Spacer(Modifier.width(6.dp))
-                        Text("Generate Scenario")
+                    if (formatOption == "PersonaForge Scenario") {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        ) {
+                            Button(
+                                onClick = { 
+                                    vm.brainstormPersonaForgeWithAi(premise = prompt)
+                                },
+                                enabled = aiEnabled && aiHasKey && !lab.aiBusy && !pfBusy,
+                                modifier = Modifier.weight(1f),
+                                colors = ButtonDefaults.buttonColors(
+                                    containerColor = MaterialTheme.colorScheme.tertiary,
+                                ),
+                            ) {
+                                if (pfBusy) {
+                                    CircularProgressIndicator(
+                                        modifier = Modifier.size(17.dp),
+                                        strokeWidth = 2.dp,
+                                        color = MaterialTheme.colorScheme.onTertiary,
+                                    )
+                                    Spacer(Modifier.width(6.dp))
+                                    Text("Brainstorming...", style = MaterialTheme.typography.labelMedium)
+                                } else {
+                                    Icon(Icons.Filled.AutoAwesome, null, Modifier.size(17.dp))
+                                    Spacer(Modifier.width(6.dp))
+                                    Text("Brainstorm for PersonaForge", style = MaterialTheme.typography.labelMedium)
+                                }
+                            }
+                            OutlinedButton(
+                                onClick = {
+                                    vm.selectSchema("personaforge")
+                                    onPlatformFields()
+                                },
+                            ) {
+                                Icon(Icons.Filled.Checklist, null, Modifier.size(16.dp))
+                                Spacer(Modifier.width(4.dp))
+                                Text("Fields")
+                            }
+                        }
+                    } else {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        ) {
+                            Button(
+                                onClick = { 
+                                    val finalTone = if (formatOption == "Custom...") customFormat else formatOption
+                                    vm.generateAiScenario(premise = prompt, tone = finalTone) 
+                                },
+                                enabled = aiEnabled && aiHasKey && !lab.aiBusy && !pfBusy && prompt.isNotBlank(),
+                                modifier = Modifier.weight(1f),
+                            ) {
+                                Icon(Icons.Filled.AutoAwesome, null, Modifier.size(17.dp))
+                                Spacer(Modifier.width(6.dp))
+                                Text("Generate Scenario")
+                            }
+                            Button(
+                                onClick = { vm.brainstormPersonaForgeWithAi(premise = prompt) },
+                                enabled = aiEnabled && aiHasKey && !lab.aiBusy && !pfBusy,
+                                colors = ButtonDefaults.buttonColors(
+                                    containerColor = MaterialTheme.colorScheme.tertiary,
+                                ),
+                            ) {
+                                if (pfBusy) {
+                                    CircularProgressIndicator(
+                                        modifier = Modifier.size(16.dp),
+                                        strokeWidth = 2.dp,
+                                        color = MaterialTheme.colorScheme.onTertiary,
+                                    )
+                                } else {
+                                    Icon(Icons.Filled.AutoAwesome, null, Modifier.size(17.dp))
+                                    Spacer(Modifier.width(4.dp))
+                                    Text("PersonaForge")
+                                }
+                            }
+                        }
                     }
                     if (!aiEnabled) {
                         Spacer(Modifier.height(8.dp))
@@ -510,7 +669,7 @@ private fun BuilderPane(
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
                     }
-                    if (lab.aiBusy) {
+                    if (lab.aiBusy || pfBusy) {
                         Spacer(Modifier.height(10.dp))
                         LinearProgressIndicator(Modifier.fillMaxWidth())
                     }
@@ -526,14 +685,85 @@ private fun BuilderPane(
             }
         }
         
-        if (lab.brief != null) {
+        val currentBrief = lab.brief
+        if (currentBrief != null) {
             item {
-                ReadingViewCard(
-                    brief = lab.brief!!,
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .weight(1f)
+                            .clickable { onEditTitle() },
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Text(
+                            currentBrief.title,
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.Bold,
+                            color = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.weight(1f, fill = false),
+                        )
+                        IconButton(onClick = onEditTitle, modifier = Modifier.size(28.dp)) {
+                            Icon(
+                                Icons.Filled.Edit,
+                                contentDescription = "Edit title",
+                                modifier = Modifier.size(16.dp),
+                                tint = MaterialTheme.colorScheme.primary,
+                            )
+                        }
+                    }
+                    SingleChoiceSegmentedButtonRow {
+                        SegmentedButton(
+                            selected = labViewMode == LabViewMode.READING,
+                            onClick = { vm.setLabViewMode(LabViewMode.READING) },
+                            shape = SegmentedButtonDefaults.itemShape(0, 2),
+                        ) {
+                            Icon(Icons.Filled.MenuBook, contentDescription = null, Modifier.size(15.dp))
+                            Spacer(Modifier.width(4.dp))
+                            Text("Reading", style = MaterialTheme.typography.labelSmall)
+                        }
+                        SegmentedButton(
+                            selected = labViewMode == LabViewMode.TUNING,
+                            onClick = { vm.setLabViewMode(LabViewMode.TUNING) },
+                            shape = SegmentedButtonDefaults.itemShape(1, 2),
+                        ) {
+                            Icon(Icons.Filled.Tune, contentDescription = null, Modifier.size(15.dp))
+                            Spacer(Modifier.width(4.dp))
+                            Text("Tuning", style = MaterialTheme.typography.labelSmall)
+                        }
+                    }
+                }
+            }
+
+            if (labViewMode == LabViewMode.READING) {
+                item {
+                    ReadingViewCard(
+                        brief = currentBrief,
+                        onSave = onSave,
+                        onShare = { vm.openExport(currentBrief.text, currentBrief.title) },
+                        onExportPersonaForge = onExportPersonaForge,
+                        onSwitchToTuning = { vm.setLabViewMode(LabViewMode.TUNING) },
+                        onEditPart = onEditPart,
+                        onEditTitle = onEditTitle,
+                        onAddPart = onAddPart,
+                    )
+                }
+            } else {
+                tuningSlotsContent(
+                    vm = vm,
+                    brief = currentBrief,
+                    smartRerollBusyKey = smartRerollBusyKey,
                     onSave = onSave,
-                    onShare = { vm.openExport(lab.brief!!.text, lab.brief!!.title) },
-                    onExportPersonaForge = { vm.exportScenarioToPersonaForge() },
-                    onSwitchToTuning = { vm.setLabViewMode(LabViewMode.TUNING) },
+                    onShare = { vm.openExport(currentBrief.text, currentBrief.title) },
+                    onExportPersonaForge = onExportPersonaForge,
+                    onPlatformFields = onPlatformFields,
+                    onExportCard = onExportCard,
+                    onImportCard = onImportCard,
+                    onEditPart = onEditPart,
+                    onAddPart = onAddPart,
                 )
             }
         }
@@ -548,6 +778,9 @@ private fun ReadingViewCard(
     onShare: () -> Unit,
     onExportPersonaForge: () -> Unit,
     onSwitchToTuning: () -> Unit,
+    onEditPart: (Part) -> Unit,
+    onEditTitle: () -> Unit,
+    onAddPart: (String) -> Unit,
 ) {
     Card(
         colors = CardDefaults.cardColors(
@@ -568,13 +801,27 @@ private fun ReadingViewCard(
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                Text(
-                    brief.title,
-                    style = MaterialTheme.typography.titleMedium,
-                    fontWeight = FontWeight.Bold,
-                    color = MaterialTheme.colorScheme.primary,
-                    modifier = Modifier.weight(1f),
-                )
+                Row(
+                    modifier = Modifier
+                        .weight(1f)
+                        .clickable { onEditTitle() },
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        brief.title,
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.weight(1f, fill = false),
+                    )
+                    Spacer(Modifier.width(6.dp))
+                    Icon(
+                        Icons.Filled.Edit,
+                        contentDescription = "Edit title",
+                        modifier = Modifier.size(16.dp),
+                        tint = MaterialTheme.colorScheme.primary.copy(alpha = 0.7f),
+                    )
+                }
                 OutlinedButton(
                     onClick = onSwitchToTuning,
                     shape = RoundedCornerShape(10.dp),
@@ -590,20 +837,50 @@ private fun ReadingViewCard(
 
             brief.slots.filter { slot -> slot.parts.any { !it.hidden } }.forEach { slot ->
                 Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                    Text(
-                        slot.heading.uppercase(),
-                        style = MaterialTheme.typography.labelSmall,
-                        fontWeight = FontWeight.SemiBold,
-                        color = MaterialTheme.colorScheme.secondary,
-                    )
-                    slot.parts.filter { !it.hidden && it.value.isNotBlank() }.forEach { part ->
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
                         Text(
-                            text = buildString {
-                                if (part.label.isNotBlank()) append("${part.label}: ")
-                                append(part.value)
-                            },
-                            style = MaterialTheme.typography.bodyMedium,
+                            slot.heading.uppercase(),
+                            style = MaterialTheme.typography.labelSmall,
+                            fontWeight = FontWeight.SemiBold,
+                            color = MaterialTheme.colorScheme.secondary,
                         )
+                        TextButton(
+                            onClick = { onAddPart(slot.key) },
+                            contentPadding = PaddingValues(horizontal = 6.dp, vertical = 2.dp),
+                            modifier = Modifier.height(24.dp),
+                        ) {
+                            Icon(Icons.Filled.Add, null, Modifier.size(12.dp))
+                            Spacer(Modifier.width(2.dp))
+                            Text("Add", style = MaterialTheme.typography.labelSmall)
+                        }
+                    }
+                    slot.parts.filter { !it.hidden && it.value.isNotBlank() }.forEach { part ->
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable { onEditPart(part) }
+                                .padding(vertical = 3.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Text(
+                                text = buildString {
+                                    if (part.label.isNotBlank()) append("${part.label}: ")
+                                    append(part.value)
+                                },
+                                style = MaterialTheme.typography.bodyMedium,
+                                modifier = Modifier.weight(1f),
+                            )
+                            Icon(
+                                Icons.Filled.Edit,
+                                contentDescription = "Edit line",
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f),
+                                modifier = Modifier.size(14.dp),
+                            )
+                        }
                     }
                 }
                 HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
@@ -630,11 +907,14 @@ private fun ReadingViewCard(
                     Spacer(Modifier.width(4.dp))
                     Text("Share")
                 }
-                OutlinedButton(
+                Button(
                     onClick = onExportPersonaForge,
                     shape = RoundedCornerShape(12.dp),
+                    colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.tertiary),
                 ) {
                     Icon(Icons.Filled.Upload, null, Modifier.size(16.dp))
+                    Spacer(Modifier.width(4.dp))
+                    Text("PersonaForge")
                 }
             }
         }
@@ -648,11 +928,16 @@ private fun GeneratePane(
     aiEnabled: Boolean,
     aiHasKey: Boolean,
     labViewMode: LabViewMode,
+    smartRerollBusyKey: String?,
     steeringExpanded: Boolean,
     onSave: () -> Unit,
     onExportCard: () -> Unit,
     onImportCard: () -> Unit,
+    onPlatformFields: () -> Unit,
     onExportPersonaForge: () -> Unit,
+    onEditPart: (Part) -> Unit,
+    onEditTitle: () -> Unit,
+    onAddPart: (String) -> Unit,
 ) {
     val context = LocalContext.current
     val lab by vm.lab.collectAsStateWithLifecycle()
@@ -739,12 +1024,28 @@ private fun GeneratePane(
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    Text(
-                        brief.title,
-                        style = MaterialTheme.typography.titleMedium,
-                        fontWeight = FontWeight.Bold,
-                        modifier = Modifier.weight(1f),
-                    )
+                    Row(
+                        modifier = Modifier
+                            .weight(1f)
+                            .clickable { onEditTitle() },
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Text(
+                            brief.title,
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.Bold,
+                            color = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.weight(1f, fill = false),
+                        )
+                        IconButton(onClick = onEditTitle, modifier = Modifier.size(28.dp)) {
+                            Icon(
+                                Icons.Filled.Edit,
+                                contentDescription = "Edit title",
+                                modifier = Modifier.size(16.dp),
+                                tint = MaterialTheme.colorScheme.primary,
+                            )
+                        }
+                    }
                     SingleChoiceSegmentedButtonRow {
                         SegmentedButton(
                             selected = labViewMode == LabViewMode.READING,
@@ -774,138 +1075,27 @@ private fun GeneratePane(
                         brief = brief,
                         onSave = onSave,
                         onShare = { vm.openExport(brief.text, brief.title) },
-                        onExportPersonaForge = { vm.exportScenarioToPersonaForge() },
+                        onExportPersonaForge = onExportPersonaForge,
                         onSwitchToTuning = { vm.setLabViewMode(LabViewMode.TUNING) },
+                        onEditPart = onEditPart,
+                        onEditTitle = onEditTitle,
+                        onAddPart = onAddPart,
                     )
                 }
             } else {
-                items(brief.slots.filter { slot -> slot.parts.any { !it.hidden } }) { slot ->
-                    Card(
-                        colors = CardDefaults.cardColors(
-                            containerColor = MaterialTheme.colorScheme.surface,
-                        ),
-                        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
-                        shape = RoundedCornerShape(12.dp),
-                        modifier = Modifier.fillMaxWidth(),
-                    ) {
-                        Column(Modifier.padding(14.dp)) {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Text(
-                                    slot.heading.uppercase(),
-                                    style = MaterialTheme.typography.labelSmall,
-                                    fontWeight = FontWeight.SemiBold,
-                                    color = if (slot.locked) {
-                                        MaterialTheme.colorScheme.primary
-                                    } else {
-                                        MaterialTheme.colorScheme.onSurfaceVariant
-                                    },
-                                    modifier = Modifier.weight(1f),
-                                )
-                                IconButton(
-                                    onClick = { vm.rerollSlot(slot.key) },
-                                    enabled = !slot.locked,
-                                ) {
-                                    Icon(
-                                        Icons.Filled.Refresh,
-                                        contentDescription = "Reroll ${slot.heading}",
-                                        modifier = Modifier.size(18.dp),
-                                    )
-                                }
-                                IconButton(onClick = { vm.lockSlot(slot.key) }) {
-                                    Icon(
-                                        if (slot.locked) Icons.Filled.Lock else Icons.Filled.LockOpen,
-                                        contentDescription = if (slot.locked) "Unlock" else "Lock",
-                                        modifier = Modifier.size(18.dp),
-                                    )
-                                }
-                            }
-                            Spacer(Modifier.height(4.dp))
-
-                            slot.parts.filter { !it.hidden }.forEach { part ->
-                                if (part.value.isNotEmpty()) {
-                                    PartRow(
-                                        part = part,
-                                        canReroll = part.bank != null && !part.locked && !slot.locked,
-                                        onReroll = { vm.rerollPart(part.key) },
-                                        onLock = { vm.lockPart(part.key) },
-                                        onPin = { vm.pinPart(part.key) },
-                                        onBlock = { vm.blockPart(part.key) },
-                                        onApplyAi = if (part.bank != null) {
-                                            { vm.applyAiToPart(part.key) }
-                                        } else {
-                                            null
-                                        },
-                                        hasAiOutput = lab.aiOutput.isNotBlank(),
-                                    )
-                                }
-                            }
-                        }
-                    }
-                }
-
-                item {
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        Button(onClick = onSave, modifier = Modifier.weight(1f)) {
-                            Icon(Icons.Filled.LibraryBooks, null, Modifier.size(17.dp))
-                            Spacer(Modifier.width(6.dp))
-                            Text("Save to Lab")
-                        }
-                        OutlinedButton(
-                            onClick = { vm.openExport(brief.text, brief.title) },
-                        ) {
-                            Icon(Icons.Filled.Share, null, Modifier.size(17.dp))
-                            Spacer(Modifier.width(6.dp))
-                            Text("Share")
-                        }
-                        OutlinedButton(
-                            onClick = { vm.exportScenarioToPersonaForge() },
-                        ) {
-                            Icon(Icons.Filled.Upload, null, Modifier.size(17.dp))
-                            Spacer(Modifier.width(6.dp))
-                            Text("Export to Persona Forge")
-                        }
-                    }
-                }
-            }
-
-            item {
-                Card(
-                    colors = CardDefaults.cardColors(
-                        containerColor = MaterialTheme.colorScheme.surfaceVariant,
-                    ),
-                ) {
-                    Column(Modifier.padding(14.dp)) {
-                        Text("Character card", style = MaterialTheme.typography.titleSmall)
-                        Spacer(Modifier.height(4.dp))
-                        Text(
-                            "Send this brief to a roleplay platform as a real character " +
-                                "card. Ember writes the PNG chunks SillyTavern and " +
-                                "RisuAI expect, and adapts the field names for " +
-                                "platforms that read them differently.",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                        Spacer(Modifier.height(10.dp))
-                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            Button(
-                                onClick = onExportCard,
-                                modifier = Modifier.weight(1f),
-                            ) {
-                                Icon(Icons.Filled.Share, null, Modifier.size(16.dp))
-                                Spacer(Modifier.width(6.dp))
-                                Text("Export card")
-                            }
-                            OutlinedButton(
-                                onClick = onImportCard,
-                                modifier = Modifier.weight(1f),
-                            ) {
-                                Icon(Icons.Filled.Add, null, Modifier.size(16.dp))
-                                Spacer(Modifier.width(6.dp))
-                                Text("Import card")
-                            }
-                        }
-                    }
-                }
+                tuningSlotsContent(
+                    vm = vm,
+                    brief = brief,
+                    smartRerollBusyKey = smartRerollBusyKey,
+                    onSave = onSave,
+                    onShare = { vm.openExport(brief.text, brief.title) },
+                    onExportPersonaForge = onExportPersonaForge,
+                    onPlatformFields = onPlatformFields,
+                    onExportCard = onExportCard,
+                    onImportCard = onImportCard,
+                    onEditPart = onEditPart,
+                    onAddPart = onAddPart,
+                )
             }
         }
 
@@ -983,6 +1173,21 @@ private fun GeneratePane(
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
+                    if (lab.aiHistory.isNotEmpty()) {
+                        Spacer(Modifier.height(4.dp))
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text(
+                                "In conversation · ${lab.aiHistory.size} turn" +
+                                    (if (lab.aiHistory.size == 1) "" else "s"),
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.weight(1f),
+                            )
+                            TextButton(onClick = vm::clearAiHistory, enabled = !lab.aiBusy) {
+                                Text("Start over", style = MaterialTheme.typography.labelSmall)
+                            }
+                        }
+                    }
                     Spacer(Modifier.height(6.dp))
                     LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         items(vm.aiActionLabels()) { label ->
@@ -1291,13 +1496,510 @@ private fun DialRow(label: String, options: List<String>, selected: Int, onSelec
  * for Pin, Block, and AI suggestions.
  */
 @Composable
+private fun EditPartDialog(
+    part: Part,
+    vm: EmberViewModel,
+    onDismiss: () -> Unit,
+    onSave: (label: String, value: String) -> Unit,
+    onSmartReroll: () -> Unit,
+    onVariations: () -> Unit,
+) {
+    var label by remember { mutableStateOf(part.label) }
+    var value by remember { mutableStateOf(part.value) }
+    var customRefinePrompt by remember { mutableStateOf("") }
+    var isRefining by remember { mutableStateOf(false) }
+    val scope = rememberCoroutineScope()
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(Icons.Filled.Edit, null, Modifier.size(20.dp), tint = MaterialTheme.colorScheme.primary)
+                Spacer(Modifier.width(8.dp))
+                Text(if (label.isNotBlank()) "Edit $label" else "Edit Detail")
+            }
+        },
+        text = {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(10.dp),
+            ) {
+                OutlinedTextField(
+                    value = label,
+                    onValueChange = { label = it },
+                    label = { Text("Field Label") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                OutlinedTextField(
+                    value = value,
+                    onValueChange = { value = it },
+                    label = { Text("Content / Value") },
+                    minLines = 3,
+                    maxLines = 8,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+
+                Text(
+                    "AI Refine:",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.primary,
+                )
+                LazyRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    val presets = listOf("More Detail", "Darker", "Punchier", "Seductive", "Emotional", "More Tense")
+                    items(presets) { preset ->
+                        AssistChip(
+                            onClick = {
+                                if (!isRefining && value.isNotBlank()) {
+                                    isRefining = true
+                                    scope.launch {
+                                        val refined = vm.refineTextWithAi(value, preset, label.ifBlank { "field" })
+                                        if (refined.isNotBlank()) value = refined
+                                        isRefining = false
+                                    }
+                                }
+                            },
+                            label = { Text(preset, style = MaterialTheme.typography.labelSmall) },
+                        )
+                    }
+                }
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    OutlinedTextField(
+                        value = customRefinePrompt,
+                        onValueChange = { customRefinePrompt = it },
+                        placeholder = { Text("Custom AI tweak (e.g. make it ironic)") },
+                        singleLine = true,
+                        modifier = Modifier.weight(1f),
+                        textStyle = MaterialTheme.typography.bodySmall,
+                    )
+                    Spacer(Modifier.width(6.dp))
+                    IconButton(
+                        onClick = {
+                            if (!isRefining && customRefinePrompt.isNotBlank() && value.isNotBlank()) {
+                                isRefining = true
+                                scope.launch {
+                                    val refined = vm.refineTextWithAi(value, customRefinePrompt, label.ifBlank { "field" })
+                                    if (refined.isNotBlank()) {
+                                        value = refined
+                                        customRefinePrompt = ""
+                                    }
+                                    isRefining = false
+                                }
+                            }
+                        },
+                        enabled = !isRefining && customRefinePrompt.isNotBlank() && value.isNotBlank(),
+                    ) {
+                        if (isRefining) {
+                            CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp)
+                        } else {
+                            Icon(Icons.Filled.AutoAwesome, "Refine with AI", Modifier.size(18.dp))
+                        }
+                    }
+                }
+
+                HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                ) {
+                    OutlinedButton(
+                        onClick = onSmartReroll,
+                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp),
+                    ) {
+                        Icon(Icons.Filled.AutoAwesome, null, Modifier.size(14.dp))
+                        Spacer(Modifier.width(4.dp))
+                        Text("Smart Reroll", style = MaterialTheme.typography.labelSmall)
+                    }
+                    OutlinedButton(
+                        onClick = onVariations,
+                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp),
+                    ) {
+                        Icon(Icons.Filled.Lightbulb, null, Modifier.size(14.dp))
+                        Spacer(Modifier.width(4.dp))
+                        Text("3 Variations", style = MaterialTheme.typography.labelSmall)
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            Button(
+                onClick = { onSave(label, value) },
+                enabled = value.isNotBlank() && !isRefining,
+            ) {
+                Text("Save")
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text("Cancel")
+            }
+        },
+    )
+}
+
+@Composable
+private fun EditTitleDialog(
+    currentTitle: String,
+    onDismiss: () -> Unit,
+    onSave: (String) -> Unit,
+) {
+    var title by remember { mutableStateOf(currentTitle) }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Edit Scenario Title") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedTextField(
+                    value = title,
+                    onValueChange = { title = it },
+                    label = { Text("Title") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+            }
+        },
+        confirmButton = {
+            Button(
+                onClick = { onSave(title) },
+                enabled = title.isNotBlank(),
+            ) {
+                Text("Save")
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text("Cancel")
+            }
+        },
+    )
+}
+
+@Composable
+private fun AddPartDialog(
+    slotHeading: String,
+    onDismiss: () -> Unit,
+    onAdd: (label: String, value: String) -> Unit,
+) {
+    var label by remember { mutableStateOf("") }
+    var value by remember { mutableStateOf("") }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Add Detail to $slotHeading") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                OutlinedTextField(
+                    value = label,
+                    onValueChange = { label = it },
+                    label = { Text("Label (e.g. Voice, Habit, Secret, Twist)") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                OutlinedTextField(
+                    value = value,
+                    onValueChange = { value = it },
+                    label = { Text("Detail Content") },
+                    minLines = 2,
+                    maxLines = 5,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+            }
+        },
+        confirmButton = {
+            Button(
+                onClick = { onAdd(label, value) },
+                enabled = value.isNotBlank(),
+            ) {
+                Text("Add")
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text("Cancel")
+            }
+        },
+    )
+}
+
+@Composable
+private fun PartVariationsDialog(
+    variations: EmberViewModel.PartVariationsState,
+    onDismiss: () -> Unit,
+    onSelect: (String) -> Unit,
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(Icons.Filled.Lightbulb, null, Modifier.size(20.dp), tint = MaterialTheme.colorScheme.tertiary)
+                Spacer(Modifier.width(8.dp))
+                Text("Logical Variations for ${variations.partLabel}")
+            }
+        },
+        text = {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(10.dp),
+            ) {
+                Text(
+                    "Current: \"${variations.currentValue}\"",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+
+                if (variations.busy) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(24.dp),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Column(
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            verticalArrangement = Arrangement.spacedBy(10.dp),
+                        ) {
+                            CircularProgressIndicator(strokeWidth = 2.dp)
+                            Text("Brainstorming 3 logical alternatives...", style = MaterialTheme.typography.bodySmall)
+                        }
+                    }
+                } else if (variations.error != null) {
+                    Text(
+                        variations.error,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.error,
+                    )
+                } else {
+                    variations.options.forEachIndexed { index, option ->
+                        Card(
+                            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
+                            shape = RoundedCornerShape(10.dp),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable { onSelect(option) },
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(12.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                Text(
+                                    "${index + 1}.",
+                                    fontWeight = FontWeight.Bold,
+                                    color = MaterialTheme.colorScheme.primary,
+                                )
+                                Spacer(Modifier.width(8.dp))
+                                Text(
+                                    option,
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    modifier = Modifier.weight(1f),
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = {},
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text("Cancel")
+            }
+        },
+    )
+}
+
+private fun LazyListScope.tuningSlotsContent(
+    vm: EmberViewModel,
+    brief: com.ember.companion.data.Brief,
+    smartRerollBusyKey: String?,
+    onSave: () -> Unit,
+    onShare: () -> Unit,
+    onExportPersonaForge: () -> Unit,
+    onPlatformFields: () -> Unit,
+    onExportCard: () -> Unit,
+    onImportCard: () -> Unit,
+    onEditPart: (Part) -> Unit,
+    onAddPart: (String) -> Unit,
+) {
+    items(brief.slots.filter { slot -> slot.parts.any { !it.hidden } }) { slot ->
+        Card(
+            colors = CardDefaults.cardColors(
+                containerColor = MaterialTheme.colorScheme.surface,
+            ),
+            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+            shape = RoundedCornerShape(12.dp),
+            modifier = Modifier.fillMaxWidth(),
+        ) {
+            Column(Modifier.padding(14.dp)) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        slot.heading.uppercase(),
+                        style = MaterialTheme.typography.labelSmall,
+                        fontWeight = FontWeight.SemiBold,
+                        color = if (slot.locked) {
+                            MaterialTheme.colorScheme.primary
+                        } else {
+                            MaterialTheme.colorScheme.onSurfaceVariant
+                        },
+                        modifier = Modifier.weight(1f),
+                    )
+                    IconButton(
+                        onClick = { vm.smartRerollSlot(slot.key) },
+                        enabled = !slot.locked,
+                    ) {
+                        Icon(
+                            Icons.Filled.Refresh,
+                            contentDescription = "Reroll ${slot.heading}",
+                            modifier = Modifier.size(18.dp),
+                        )
+                    }
+                    IconButton(onClick = { vm.lockSlot(slot.key) }) {
+                        Icon(
+                            if (slot.locked) Icons.Filled.Lock else Icons.Filled.LockOpen,
+                            contentDescription = if (slot.locked) "Unlock" else "Lock",
+                            modifier = Modifier.size(18.dp),
+                        )
+                    }
+                }
+                Spacer(Modifier.height(4.dp))
+
+                slot.parts.filter { !it.hidden }.forEach { part ->
+                    if (part.value.isNotEmpty()) {
+                        PartRow(
+                            part = part,
+                            canReroll = !part.locked && !slot.locked,
+                            isRerolling = smartRerollBusyKey == part.key,
+                            onEdit = { onEditPart(part) },
+                            onReroll = { vm.smartRerollPart(part.key) },
+                            onBankReroll = if (part.bank != null) { { vm.rerollPart(part.key) } } else null,
+                            onVariations = { vm.requestPartVariations(part.key) },
+                            onLock = { vm.lockPart(part.key) },
+                            onPin = { vm.pinPart(part.key) },
+                            onBlock = { vm.blockPart(part.key) },
+                            onDelete = { vm.removePart(part.key) },
+                            onApplyAi = if (part.bank != null) {
+                                { vm.applyAiToPart(part.key) }
+                            } else null,
+                            hasAiOutput = false,
+                        )
+                    }
+                }
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.End,
+                ) {
+                    TextButton(
+                        onClick = { onAddPart(slot.key) },
+                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
+                    ) {
+                        Icon(Icons.Filled.Add, null, Modifier.size(14.dp))
+                        Spacer(Modifier.width(4.dp))
+                        Text("Add detail", style = MaterialTheme.typography.labelSmall)
+                    }
+                }
+            }
+        }
+    }
+
+    item {
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Button(onClick = onSave, modifier = Modifier.weight(1f)) {
+                Icon(Icons.Filled.LibraryBooks, null, Modifier.size(17.dp))
+                Spacer(Modifier.width(6.dp))
+                Text("Save to Lab")
+            }
+            OutlinedButton(onClick = onShare) {
+                Icon(Icons.Filled.Share, null, Modifier.size(17.dp))
+                Spacer(Modifier.width(6.dp))
+                Text("Share")
+            }
+            Button(
+                onClick = onExportPersonaForge,
+                colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.tertiary),
+            ) {
+                Icon(Icons.Filled.Upload, null, Modifier.size(17.dp))
+                Spacer(Modifier.width(6.dp))
+                Text("PersonaForge")
+            }
+        }
+    }
+
+    item {
+        Card(
+            colors = CardDefaults.cardColors(
+                containerColor = MaterialTheme.colorScheme.surfaceVariant,
+            ),
+        ) {
+            Column(Modifier.padding(14.dp)) {
+                Text("Character card & Platform Export", style = MaterialTheme.typography.titleSmall)
+                Spacer(Modifier.height(4.dp))
+                Text(
+                    "Send this brief to a roleplay platform as a character card or PNG chunks.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Spacer(Modifier.height(10.dp))
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Button(
+                        onClick = onPlatformFields,
+                        modifier = Modifier.weight(1f),
+                    ) {
+                        Icon(Icons.Filled.Checklist, null, Modifier.size(16.dp))
+                        Spacer(Modifier.width(6.dp))
+                        Text("Platform fields")
+                    }
+                    OutlinedButton(
+                        onClick = onExportCard,
+                        modifier = Modifier.weight(1f),
+                    ) {
+                        Icon(Icons.Filled.Share, null, Modifier.size(16.dp))
+                        Spacer(Modifier.width(6.dp))
+                        Text("Export card")
+                    }
+                }
+                Spacer(Modifier.height(8.dp))
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedButton(
+                        onClick = onImportCard,
+                        modifier = Modifier.weight(1f),
+                    ) {
+                        Icon(Icons.Filled.Add, null, Modifier.size(16.dp))
+                        Spacer(Modifier.width(6.dp))
+                        Text("Import card")
+                    }
+                }
+            }
+        }
+    }
+}
+
+/**
+ * One addressable line. Directly clickable to edit, with inline edit pencil,
+ * smart AI refresh, variations brainstorm, and overflow actions.
+ */
+@Composable
 private fun PartRow(
     part: Part,
     canReroll: Boolean,
+    isRerolling: Boolean,
+    onEdit: () -> Unit,
     onReroll: () -> Unit,
+    onBankReroll: (() -> Unit)?,
+    onVariations: () -> Unit,
     onLock: () -> Unit,
     onPin: () -> Unit,
     onBlock: () -> Unit,
+    onDelete: () -> Unit,
     onApplyAi: (() -> Unit)?,
     hasAiOutput: Boolean,
 ) {
@@ -1306,6 +2008,7 @@ private fun PartRow(
     Row(
         modifier = Modifier
             .fillMaxWidth()
+            .clickable { onEdit() }
             .padding(vertical = 4.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
@@ -1331,12 +2034,26 @@ private fun PartRow(
             }
         }
         Spacer(Modifier.width(4.dp))
-        IconButton(onClick = onReroll, enabled = canReroll, modifier = Modifier.size(32.dp)) {
+        IconButton(onClick = onEdit, modifier = Modifier.size(32.dp)) {
             Icon(
-                Icons.Filled.Refresh,
-                "Reroll this line",
-                Modifier.size(17.dp),
+                Icons.Filled.Edit,
+                "Edit line",
+                Modifier.size(16.dp),
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
             )
+        }
+        if (isRerolling) {
+            Box(modifier = Modifier.size(32.dp), contentAlignment = Alignment.Center) {
+                CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
+            }
+        } else {
+            IconButton(onClick = onReroll, enabled = canReroll, modifier = Modifier.size(32.dp)) {
+                Icon(
+                    Icons.Filled.Refresh,
+                    "Smart reroll",
+                    Modifier.size(17.dp),
+                )
+            }
         }
         IconButton(onClick = onLock, modifier = Modifier.size(32.dp)) {
             Icon(
@@ -1356,6 +2073,42 @@ private fun PartRow(
             }
             DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
                 DropdownMenuItem(
+                    text = { Text("Edit line") },
+                    leadingIcon = { Icon(Icons.Filled.Edit, null, Modifier.size(18.dp)) },
+                    onClick = {
+                        menuOpen = false
+                        onEdit()
+                    },
+                )
+                DropdownMenuItem(
+                    text = { Text("Smart AI Reroll") },
+                    leadingIcon = { Icon(Icons.Filled.AutoAwesome, null, Modifier.size(18.dp)) },
+                    onClick = {
+                        menuOpen = false
+                        onReroll()
+                    },
+                    enabled = canReroll,
+                )
+                DropdownMenuItem(
+                    text = { Text("Brainstorm 3 Options") },
+                    leadingIcon = { Icon(Icons.Filled.Lightbulb, null, Modifier.size(18.dp)) },
+                    onClick = {
+                        menuOpen = false
+                        onVariations()
+                    },
+                )
+                if (onBankReroll != null) {
+                    DropdownMenuItem(
+                        text = { Text("Roll from Bank (Random)") },
+                        leadingIcon = { Icon(Icons.Filled.Refresh, null, Modifier.size(18.dp)) },
+                        onClick = {
+                            menuOpen = false
+                            onBankReroll()
+                        },
+                        enabled = canReroll,
+                    )
+                }
+                DropdownMenuItem(
                     text = { Text("Pin value") },
                     leadingIcon = { Icon(Icons.Filled.PushPin, null, Modifier.size(18.dp)) },
                     onClick = {
@@ -1372,6 +2125,14 @@ private fun PartRow(
                         onBlock()
                     },
                     enabled = part.bank != null,
+                )
+                DropdownMenuItem(
+                    text = { Text("Delete line") },
+                    leadingIcon = { Icon(Icons.Filled.Delete, null, Modifier.size(18.dp), tint = MaterialTheme.colorScheme.error) },
+                    onClick = {
+                        menuOpen = false
+                        onDelete()
+                    },
                 )
                 if (onApplyAi != null) {
                     DropdownMenuItem(

@@ -1,11 +1,13 @@
 package com.ember.companion.ui.discover
 
 import android.annotation.SuppressLint
+import android.app.Activity
 import android.content.Context
 import android.content.Intent
 import android.graphics.Bitmap
 import android.net.Uri
 import android.view.View
+import android.view.ViewGroup
 import android.webkit.CookieManager
 import android.webkit.RenderProcessGoneDetail
 import android.webkit.WebChromeClient
@@ -15,6 +17,10 @@ import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import androidx.activity.compose.BackHandler
+import androidx.compose.ui.zIndex
+import androidx.core.view.WindowCompat
+import androidx.core.view.WindowInsetsCompat
+import androidx.core.view.WindowInsetsControllerCompat
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -25,6 +31,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.BorderStroke
@@ -33,6 +40,7 @@ import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.background
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
@@ -40,6 +48,11 @@ import androidx.compose.material.icons.automirrored.filled.ArrowForward
 import androidx.compose.material.icons.automirrored.filled.OpenInNew
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Bookmark
+import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.Download
+import androidx.compose.material.icons.filled.Downloading
+import androidx.compose.material.icons.filled.Error
+import androidx.compose.material.icons.filled.Schedule
 import androidx.compose.material.icons.filled.BookmarkBorder
 import androidx.compose.material.icons.filled.BrowserUpdated
 import androidx.compose.material.icons.filled.CleaningServices
@@ -60,6 +73,7 @@ import androidx.compose.material.icons.filled.VisibilityOff
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.AssistChip
 import androidx.compose.material3.Button
+import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
@@ -72,6 +86,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
@@ -80,6 +95,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -100,7 +116,12 @@ import com.ember.companion.data.SearchEngine
 import com.ember.companion.data.Sources
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.layout.ContentScale
+import coil.compose.AsyncImage
 import androidx.compose.material.icons.filled.ArrowDropDown
+import androidx.compose.material.icons.filled.Image
+import androidx.compose.material.icons.filled.PlayArrow
+import com.ember.companion.data.PageMediaScan
 import com.ember.companion.ui.EmberViewModel
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -117,6 +138,7 @@ fun DiscoverScreen(vm: EmberViewModel, contentPadding: PaddingValues) {
 
     var overflowOpen by remember { mutableStateOf(false) }
     var engineMenuOpen by remember { mutableStateOf(false) }
+    var showDownloadQueue by remember { mutableStateOf(false) }
     var query by remember { mutableStateOf("") }
     var urlDraft by remember { mutableStateOf("") }
     var showInfo by remember { mutableStateOf(false) }
@@ -124,6 +146,8 @@ fun DiscoverScreen(vm: EmberViewModel, contentPadding: PaddingValues) {
     // The WebView is created by the AndroidView factory so Compose owns its
     // lifecycle; we keep a reference for imperative calls (loadUrl, goBack).
     var webView by remember { mutableStateOf<WebView?>(null) }
+    var customView by remember { mutableStateOf<View?>(null) }
+    var customViewCallback by remember { mutableStateOf<WebChromeClient.CustomViewCallback?>(null) }
 
     // Snapshot the reference for this composition. Everything below keys off this
     // local rather than reading the delegated `webView` property lazily, because a
@@ -164,7 +188,13 @@ fun DiscoverScreen(vm: EmberViewModel, contentPadding: PaddingValues) {
         }
     }
 
-    BackHandler(enabled = !browser.atHome) {
+    BackHandler(enabled = customView != null) {
+        customViewCallback?.onCustomViewHidden()
+        customView = null
+        customViewCallback = null
+    }
+
+    BackHandler(enabled = customView == null && !browser.atHome) {
         val wv = webView
         if (wv?.canGoBack() == true) wv.goBack() else vm.showLauncher()
     }
@@ -322,13 +352,20 @@ fun DiscoverScreen(vm: EmberViewModel, contentPadding: PaddingValues) {
                                 )
                                 DropdownMenuItem(
                                     text = { Text("Scan page for media") },
+                                    enabled = !vm.scanBusy.value,
                                     leadingIcon = { Icon(Icons.Filled.Search, null) },
-                                    onClick = {
-                                        overflowOpen = false
-                                        webView?.evaluateJavascript(
-                                            "(function(){var c=new Set();Array.from(document.images).forEach(i=>{if(i.src)c.add(i.src)});Array.from(document.querySelectorAll('video,source')).forEach(v=>{if(v.src)c.add(v.src)});return JSON.stringify(Array.from(c));})()"
-                                        ) { result -> vm.onMediaExtracted(result) }
-                                    },
+onClick = {
+                                    overflowOpen = false
+                                    vm.setScanBusy(true)
+                                    vm.armMediaSheet()
+                                    webView?.evaluateJavascript(PageMediaScan.SCRIPT) { result ->
+                                        vm.onMediaExtracted(result, browser.url)
+                                        vm.setScanBusy(false)
+                                    } ?: run {
+                                        vm.setScanBusy(false)
+                                        vm.showMessage("Page not ready to scan")
+                                    }
+                                },
                                 )
                                 DropdownMenuItem(
                                     text = { Text("Share") },
@@ -361,6 +398,15 @@ fun DiscoverScreen(vm: EmberViewModel, contentPadding: PaddingValues) {
                                         vm.clearHistory()
                                     },
                                 )
+                                val pendingDownloads by remember { derivedStateOf { vm.activeDownloadCount.value } }
+                                DropdownMenuItem(
+                                    text = { Text(if (pendingDownloads > 0) "Downloads ($pendingDownloads running)" else "Downloads") },
+                                    leadingIcon = { Icon(Icons.Filled.Download, null) },
+                                    onClick = {
+                                        overflowOpen = false
+                                        showDownloadQueue = true
+                                    },
+                                )
                             }
                         },
                     )
@@ -381,7 +427,19 @@ fun DiscoverScreen(vm: EmberViewModel, contentPadding: PaddingValues) {
         Box(Modifier.padding(inner).padding(contentPadding).fillMaxSize()) {
             AndroidView(
                 factory = { ctx: Context ->
-                    val wv: WebView = createWebView(ctx, vm)
+                    val wv: WebView = createWebView(
+                        context = ctx,
+                        vm = vm,
+                        onShowCustomView = { v, cb ->
+                            customView = v
+                            customViewCallback = cb
+                        },
+                        onHideCustomView = {
+                            customViewCallback?.onCustomViewHidden()
+                            customView = null
+                            customViewCallback = null
+                        },
+                    )
                     webView = wv
                     Diag.log("webview created ${wv.hashCode()}")
                     wv
@@ -410,6 +468,34 @@ fun DiscoverScreen(vm: EmberViewModel, contentPadding: PaddingValues) {
         }
     }
 
+    if (customView != null) {
+        val window = (context as? Activity)?.window
+        DisposableEffect(Unit) {
+            val insetsController = window?.let { WindowCompat.getInsetsController(it, it.decorView) }
+            insetsController?.systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+            insetsController?.hide(WindowInsetsCompat.Type.systemBars())
+            onDispose {
+                insetsController?.show(WindowInsetsCompat.Type.systemBars())
+            }
+        }
+
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(androidx.compose.ui.graphics.Color.Black)
+                .zIndex(999f),
+        ) {
+            AndroidView(
+                factory = { _ ->
+                    val parent = customView?.parent as? ViewGroup
+                    parent?.removeView(customView)
+                    customView ?: View(context)
+                },
+                modifier = Modifier.fillMaxSize(),
+            )
+        }
+    }
+
     if (showInfo) {
         AlertDialog(
             onDismissRequest = { showInfo = false },
@@ -430,27 +516,440 @@ fun DiscoverScreen(vm: EmberViewModel, contentPadding: PaddingValues) {
         )
     }
     
-    val extracted = vm.extractedMedia.collectAsStateWithLifecycle().value
-    if (extracted.isNotEmpty()) {
-        AlertDialog(
-            onDismissRequest = { vm.clearExtractedMedia() },
-            title = { Text("Found Media") },
-            text = {
-                androidx.compose.foundation.lazy.LazyColumn {
-                    items(extracted.size) { i ->
-                        val url = extracted[i]
-                        Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
-                            Text(url.substringAfterLast('/'), maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
-                            IconButton(onClick = { vm.startDownload(context, url, null, "", null) }) {
-                                Icon(Icons.Filled.Bookmark, contentDescription = "Download")
-                            }
-                        }
+    ScannedMediaSheet(vm = vm)
+
+    if (showDownloadQueue) {
+        DownloadQueueDialog(vm = vm, onDismiss = { showDownloadQueue = false })
+    }
+}
+
+/**
+ * Results of a page scan, as real cards instead of a wall of filenames.
+ *
+ * Everything here comes from what the page itself published (schema.org JSON-LD
+ * or OpenGraph), read by [PageMediaScan] inside the already-loaded WebView — so
+ * titles, runtimes, resolutions and poster frames are the site's own numbers,
+ * not guesses. Runs entirely on the device; Ember has no server.
+ */
+@OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class)
+@Composable
+private fun ScannedMediaSheet(vm: EmberViewModel) {
+    val context = LocalContext.current
+    val busy by vm.scanBusy.collectAsStateWithLifecycle()
+    val items by vm.visibleScannedMedia.collectAsStateWithLifecycle()
+    val all by vm.extractedMedia.collectAsStateWithLifecycle()
+    val metaOnly by vm.scanMetaOnly.collectAsStateWithLifecycle()
+    val downloads by vm.downloads.collectAsStateWithLifecycle()
+    var showAll by remember { mutableStateOf(false) }
+    var showQueue by remember { mutableStateOf(false) }
+
+    // Show the sheet whenever a scan produced anything (including a metadata-only
+    // scan filtered down to nothing, so the user can flip to "show all"), but
+    // only when the user actually asked for it. The media observer fires on
+    // every request the page makes, and a stray scroll would otherwise reopen
+    // this the moment it was dismissed.
+    if (all.isEmpty() && !busy) return
+    if (!vm.isMediaSheetArmed()) return
+
+    ModalBottomSheet(onDismissRequest = { vm.clearExtractedMedia() }) {
+        Column(
+            Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp)
+                .padding(bottom = 24.dp)
+        ) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Column(Modifier.weight(1f)) {
+                    Text(
+                        if (all.isEmpty()) "Scanning page…" else "Found on this page",
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.Bold,
+                    )
+                    if (all.isNotEmpty()) {
+                        val detailed = all.count { it.fromMetadata }
+                        Text(
+                            if (detailed > 0) "$detailed with details · ${all.size} total"
+                            else "${all.size} found · page published no details",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
                     }
                 }
-            },
-            confirmButton = { TextButton(onClick = { vm.clearExtractedMedia() }) { Text("Close") } }
+                if (busy) {
+                    CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp)
+                }
+            }
+
+            if (all.isNotEmpty()) {
+                Spacer(Modifier.height(10.dp))
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    FilterChip(
+                        selected = !metaOnly,
+                        onClick = { showAll = true; vm.setScanMetaOnly(false) },
+                        label = { Text("Everything (${all.size})") },
+                    )
+                    FilterChip(
+                        selected = metaOnly,
+                        onClick = { showAll = false; vm.setScanMetaOnly(true) },
+                        label = { Text("With details (${all.count { it.fromMetadata }})") },
+                    )
+                }
+            }
+
+            Spacer(Modifier.height(12.dp))
+
+            if (items.isEmpty()) {
+                Text(
+                    "This page didn't publish media details. Switch to Everything to see raw files.",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(vertical = 12.dp),
+                )
+            } else {
+                LazyColumn(
+                    verticalArrangement = Arrangement.spacedBy(10.dp),
+                    modifier = Modifier.heightIn(max = 520.dp),
+                ) {
+                    items(items.size, key = { i -> items[i].url }) { i ->
+                        ScannedMediaCard(
+                            item = items[i],
+                            onDownload = {
+                                vm.saveScannedToLibrary(context, items[i])
+                                showQueue = true
+                            },
+                            downloads = downloads,
+                        )
+                    }
+                }
+            }
+
+            Spacer(Modifier.height(12.dp))
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+                TextButton(onClick = { vm.clearExtractedMedia() }) { Text("Close") }
+            }
+        }
+    }
+
+    if (showQueue) {
+        DownloadQueueDialog(
+            vm = vm,
+            onDismiss = { showQueue = false },
         )
     }
+}
+
+/**
+ * Live download queue.
+ *
+ * Ember previously reported only "unsupported download type" and moved on, so a
+ * user had no way to tell a refused link from a slow one. Every download now
+ * carries its real state from the system download manager — queued, running with
+ * a progress bar, done, or failed with the reason — and failures can be retried
+ * in place.
+ */
+@OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class)
+@Composable
+fun DownloadQueueDialog(
+    vm: EmberViewModel,
+    onDismiss: () -> Unit,
+) {
+    val context = LocalContext.current
+    val downloads by vm.downloads.collectAsStateWithLifecycle()
+
+    ModalBottomSheet(onDismissRequest = onDismiss) {
+        Column(
+            Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 20.dp)
+                .padding(bottom = 32.dp)
+        ) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Column(Modifier.weight(1f)) {
+                    Text("Downloads", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+                    val active = downloads.count {
+                        it.state == EmberViewModel.DownloadState.QUEUED ||
+                            it.state == EmberViewModel.DownloadState.RUNNING
+                    }
+                    Text(
+                        if (downloads.isEmpty()) "Nothing yet"
+                        else if (active > 0) "$active in progress · ${downloads.size} total"
+                        else "${downloads.size} finished · saved to Downloads/Ember",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                IconButton(onClick = onDismiss) {
+                    Icon(Icons.Filled.Close, contentDescription = "Close")
+                }
+            }
+
+            Spacer(Modifier.height(10.dp))
+
+            if (downloads.isEmpty()) {
+                Text(
+                    "Downloads you start appear here with their progress and result.",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            } else {
+                LazyColumn(
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                    modifier = Modifier.heightIn(max = 460.dp),
+                ) {
+                    items(downloads.size, key = { i -> downloads[i].id }) { i ->
+                        DownloadRow(
+                            entry = downloads[i],
+                            onRetry = { vm.retryDownload(context, downloads[i]) },
+                            onOpen = { vm.openDownloadsFolder(context) },
+                        )
+                    }
+                }
+                Spacer(Modifier.height(10.dp))
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedButton(onClick = { vm.openDownloadsFolder(context) }) {
+                        Text("Open folder", style = MaterialTheme.typography.labelMedium)
+                    }
+                    TextButton(onClick = vm::clearFinishedDownloads) {
+                        Text("Clear finished", style = MaterialTheme.typography.labelMedium)
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun DownloadRow(
+    entry: EmberViewModel.DownloadEntry,
+    onRetry: () -> Unit,
+    onOpen: () -> Unit,
+) {
+    val color = when (entry.state) {
+        EmberViewModel.DownloadState.SUCCESS -> MaterialTheme.colorScheme.primary
+        EmberViewModel.DownloadState.FAILED -> MaterialTheme.colorScheme.error
+        else -> MaterialTheme.colorScheme.onSurfaceVariant
+    }
+    val icon = when (entry.state) {
+        EmberViewModel.DownloadState.SUCCESS -> Icons.Filled.CheckCircle
+        EmberViewModel.DownloadState.FAILED -> Icons.Filled.Error
+        EmberViewModel.DownloadState.CHECKING -> Icons.Filled.Search
+        EmberViewModel.DownloadState.RUNNING -> Icons.Filled.Downloading
+        EmberViewModel.DownloadState.QUEUED -> Icons.Filled.Schedule
+    }
+    val status = when (entry.state) {
+        EmberViewModel.DownloadState.SUCCESS -> "Saved"
+        EmberViewModel.DownloadState.FAILED -> entry.reason.ifBlank { "Failed" }
+        EmberViewModel.DownloadState.CHECKING -> "Checking what this link is…"
+        EmberViewModel.DownloadState.RUNNING ->
+            when {
+                entry.progressLabel.isNotBlank() -> entry.progressLabel
+                entry.totalBytes > 0 -> "${entry.doneBytes / 1024} of ${entry.totalBytes / 1024} KB"
+                else -> "Downloading"
+            }
+        EmberViewModel.DownloadState.QUEUED -> "Queued"
+    }
+
+    Card(
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
+        shape = RoundedCornerShape(12.dp),
+    ) {
+        Column(Modifier.padding(12.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(icon, null, Modifier.size(18.dp), tint = color)
+                Spacer(Modifier.width(8.dp))
+                Column(Modifier.weight(1f)) {
+                    Text(
+                        entry.fileName,
+                        style = MaterialTheme.typography.bodyMedium,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                    Text(status, style = MaterialTheme.typography.labelSmall, color = color)
+                }
+                if (entry.state == EmberViewModel.DownloadState.FAILED) {
+                    TextButton(onClick = onRetry) {
+                        Text("Retry", style = MaterialTheme.typography.labelSmall)
+                    }
+                } else if (entry.state == EmberViewModel.DownloadState.SUCCESS) {
+                    IconButton(onClick = onOpen, modifier = Modifier.size(32.dp)) {
+                        Icon(
+                            Icons.AutoMirrored.Filled.OpenInNew,
+                            "Open folder",
+                            Modifier.size(16.dp),
+                        )
+                    }
+                }
+            }
+            if (entry.state == EmberViewModel.DownloadState.RUNNING && entry.totalBytes > 0) {
+                LinearProgressIndicator(
+                    progress = { (entry.doneBytes.toFloat() / entry.totalBytes).coerceIn(0f, 1f) },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(3.dp)
+                        .padding(top = 6.dp)
+                        .clip(RoundedCornerShape(2.dp)),
+                )
+            }
+        }
+    }
+}
+
+/**
+ * A scanned item with a labelled download button.
+ *
+ * The button says "Download" in words and reports the outcome inline, because
+ * an unlabelled icon that silently refuses is indistinguishable from a bug.
+ */
+@Composable
+private fun ScannedMediaCard(
+    item: com.ember.companion.data.PageMedia,
+    onDownload: () -> Unit,
+    downloads: List<EmberViewModel.DownloadEntry>,
+) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
+        shape = RoundedCornerShape(14.dp),
+    ) {
+        Row(Modifier.padding(10.dp), verticalAlignment = Alignment.CenterVertically) {
+            // Poster frame. Remote thumbnails load via Coil, which LibraryScreen
+            // already uses, so this needs no new dependency.
+            Box(
+                Modifier
+                    .size(width = 132.dp, height = 76.dp)
+                    .clip(RoundedCornerShape(10.dp))
+                    .background(MaterialTheme.colorScheme.surface),
+                contentAlignment = Alignment.Center,
+            ) {
+                if (item.thumbnailUrl.isNotBlank() && item.thumbnailUrl.startsWith("http")) {
+                    AsyncImage(
+                        model = item.thumbnailUrl,
+                        contentDescription = null,
+                        contentScale = ContentScale.Crop,
+                        modifier = Modifier.fillMaxSize(),
+                    )
+                } else {
+                    Icon(
+                        imageVector = if (item.isVideo) Icons.Filled.PlayArrow else Icons.Filled.Image,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                if (item.durationLabel.isNotBlank()) {
+                    Text(
+                        item.durationLabel,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = androidx.compose.ui.graphics.Color.White,
+                        modifier = Modifier
+                            .align(Alignment.BottomEnd)
+                            .padding(3.dp)
+                            .clip(RoundedCornerShape(4.dp))
+                            .background(androidx.compose.ui.graphics.Color(0xB3000000))
+                            .padding(horizontal = 4.dp, vertical = 1.dp),
+                    )
+                }
+            }
+
+            Spacer(Modifier.width(10.dp))
+
+            Column(Modifier.weight(1f)) {
+                Text(
+                    item.displayTitle,
+                    style = MaterialTheme.typography.bodyMedium,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                    fontWeight = FontWeight.Medium,
+                )
+                Spacer(Modifier.height(3.dp))
+                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    if (item.isVideo) MediaBadge("Video")
+                    val res = item.resolutionLabel
+                    if (res.isNotBlank()) MediaBadge(res)
+                    if (!item.fromMetadata) MediaBadge("Raw file")
+                }
+                if (item.title.isNotBlank()) {
+                    Spacer(Modifier.height(2.dp))
+                    Text(
+                        item.url.substringAfterLast('/').substringBefore('?').take(48),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+            }
+
+            // Live state for this specific file, so the card can say whether its
+            // own download worked rather than leaving the user to guess.
+            val mine = downloads.lastOrNull { d ->
+                d.url == item.url || item.url.endsWith(d.url) || d.url.endsWith(item.url)
+            }
+
+            Column(horizontalAlignment = Alignment.End) {
+                FilledTonalButton(
+                    onClick = onDownload,
+                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
+                ) {
+                    Icon(Icons.Filled.Download, null, Modifier.size(16.dp))
+                    Spacer(Modifier.width(6.dp))
+                    Text("Download", style = MaterialTheme.typography.labelMedium)
+                }
+                if (mine != null) {
+                    Spacer(Modifier.height(4.dp))
+                    when (mine.state) {
+                        EmberViewModel.DownloadState.SUCCESS -> Row(verticalAlignment = Alignment.CenterVertically) {
+                            Icon(
+                                Icons.Filled.CheckCircle,
+                                null,
+                                Modifier.size(13.dp),
+                                tint = MaterialTheme.colorScheme.primary,
+                            )
+                            Spacer(Modifier.width(3.dp))
+                            Text(
+                                "Saved",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.primary,
+                            )
+                        }
+                        EmberViewModel.DownloadState.FAILED -> Text(
+                            mine.reason.ifBlank { "Failed" },
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.error,
+                            maxLines = 2,
+                        )
+                        EmberViewModel.DownloadState.CHECKING -> Text(
+                            "Checking…",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                        EmberViewModel.DownloadState.RUNNING -> Text(
+                            if (mine.totalBytes > 0) "${mine.doneBytes / 1024} KB" else "Downloading…",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                        EmberViewModel.DownloadState.QUEUED -> Text(
+                            "Queued",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun MediaBadge(text: String) {
+    Text(
+        text,
+        style = MaterialTheme.typography.labelSmall,
+        color = MaterialTheme.colorScheme.primary,
+        modifier = Modifier
+            .clip(RoundedCornerShape(5.dp))
+            .background(MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.5f))
+            .padding(horizontal = 5.dp, vertical = 1.dp),
+    )
 }
 
 @Composable
@@ -708,7 +1207,12 @@ private fun Launcher(
 }
 
 @SuppressLint("SetJavaScriptEnabled")
-private fun createWebView(context: Context, vm: EmberViewModel): WebView {
+private fun createWebView(
+    context: Context,
+    vm: EmberViewModel,
+    onShowCustomView: (View, WebChromeClient.CustomViewCallback) -> Unit,
+    onHideCustomView: () -> Unit,
+): WebView {
     val webView = WebView(context)
     // Deterministic background. A transparent WebView shows whatever the window
     // composites behind it, which on a dark theme is an unreadable black void
@@ -741,6 +1245,9 @@ private fun createWebView(context: Context, vm: EmberViewModel): WebView {
         if (vm.desktopMode.value) {
             userAgentString = DESKTOP_UA
         }
+        // Auto-resolved downloads refetch segments outside the WebView, so they
+        // have to present the same agent the page was served under.
+        vm.setWebUserAgent(userAgentString)
     }
 
     
@@ -757,6 +1264,42 @@ private fun createWebView(context: Context, vm: EmberViewModel): WebView {
             Diag.log("nav done status=${view?.url} title=${view?.title?.take(40)}")
             vm.onPageFinished(view?.title.orEmpty(), url.orEmpty())
             view?.let { vm.onNavState(it.canGoBack(), it.canGoForward()) }
+            // A search result was opened for its download. The player often
+            // requests the stream just after onPageFinished, so give it a moment
+            // before scanning or the only media found would be thumbnails.
+            if (vm.consumeAutoScan()) {
+                val target = view ?: return
+                // Only if the network observer has not already grabbed the
+                // stream on its own; otherwise this is the fallback for sites
+                // whose manifest never showed up as a request.
+                if (!vm.isResolving()) vm.armMediaSheet()
+                target.postDelayed({
+                    runCatching {
+                        target.evaluateJavascript(PageMediaScan.SCRIPT) { result ->
+                            vm.onMediaExtracted(result, url)
+                        }
+                    }.onFailure {
+                        vm.showMessage("Page not ready to scan")
+                    }
+                }, SCAN_DELAY_AFTER_LOAD_MS)
+            }
+        }
+
+        /**
+         * Watches what the page fetches, so playlists found only in script are
+         * still catchable.
+         *
+         * Returns null to let the request proceed untouched — this is purely an
+         * observation point, and Ember must never alter or block page traffic.
+         * Doing so would break playback and put it in the path of circumventing a
+         * site's own access decisions.
+         */
+        override fun shouldInterceptRequest(
+            view: WebView?,
+            request: WebResourceRequest?,
+        ): android.webkit.WebResourceResponse? {
+            request?.url?.toString()?.let { vm.onNetworkMediaSeen(it) }
+            return null
         }
 
         /**
@@ -825,6 +1368,18 @@ private fun createWebView(context: Context, vm: EmberViewModel): WebView {
 
     webView.webChromeClient = object : WebChromeClient() {
 
+        override fun onShowCustomView(view: View?, callback: CustomViewCallback?) {
+            Diag.log("webChromeClient onShowCustomView")
+            if (view != null && callback != null) {
+                onShowCustomView(view, callback)
+            }
+        }
+
+        override fun onHideCustomView() {
+            Diag.log("webChromeClient onHideCustomView")
+            onHideCustomView()
+        }
+
         override fun onProgressChanged(view: WebView?, newProgress: Int) {
             if (newProgress >= 100) vm.onNavState(view?.canGoBack() ?: false, view?.canGoForward() ?: false)
         }
@@ -857,6 +1412,8 @@ private fun createWebView(context: Context, vm: EmberViewModel): WebView {
 
     return webView
 }
+
+private const val SCAN_DELAY_AFTER_LOAD_MS = 1400L
 
 private const val DESKTOP_UA =
     "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) " +

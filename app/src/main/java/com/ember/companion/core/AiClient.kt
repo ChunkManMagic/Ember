@@ -68,9 +68,22 @@ internal fun looksLikeAnAnswer(text: String?): Boolean {
  * user supplies their own key; nothing is proxied through Ember and no key is
  * ever logged, persisted in plaintext, or included in any crash text.
  */
-internal fun isOpenAiReasoningModel(model: String): Boolean {
+/**
+ * Models that think before they answer, across every provider Ember supports.
+ *
+ * Only matching OpenAI's own o-series was a real bug for OpenRouter users:
+ * OpenRouter serves plenty of reasoning models under other names (DeepSeek R1
+ * and QwQ variants, for two), and they charge that reasoning against
+ * max_tokens exactly the same way. Missing them meant the request silently ran
+ * with the wrong token parameter, and a truncated reply surfaced as the
+ * confusing "no text in the response" error.
+ */
+internal fun isReasoningModel(model: String): Boolean {
     val m = model.lowercase().trim()
-    return m.startsWith("o1") || m.startsWith("o3") || m.startsWith("o4")
+    return m.startsWith("o1") || m.startsWith("o3") || m.startsWith("o4") ||
+        m.contains("deepseek-r1") || m.contains("deepseek-r") && m.contains("distill") ||
+        m.contains("qwq") || m.contains("thinking") || m.contains("reasoner") ||
+        m.contains("magistral") && m.contains("small") && m.contains("think")
 }
 
 internal fun buildSystemPrompt(
@@ -121,7 +134,7 @@ internal fun buildOpenAiRequestBody(
     temperature: Double,
     sysPrompt: String,
 ): JsonObject {
-    val isReasoning = isOpenAiReasoningModel(model)
+    val isReasoning = isReasoningModel(model)
     return buildJsonObject {
         put("model", model)
         if (isReasoning) {
@@ -184,6 +197,14 @@ internal fun buildGeminiRequestBody(
     putJsonObject("generationConfig") {
         put("maxOutputTokens", maxTokens)
         put("temperature", temperature.coerceIn(0.0, 2.0))
+        // Gemini's thinking models charge thinking tokens against
+        // maxOutputTokens. Left at the default, a small budget was spent
+        // entirely on private reasoning and the response came back with zero
+        // text — the "no text in the response" the Lab kept reporting. Capping
+        // thinking keeps the budget for the actual answer.
+        putJsonObject("thinkingConfig") {
+            put("thinkingBudget", 0)
+        }
     }
 }
 
@@ -332,10 +353,18 @@ class AiClient(private val settings: SettingsStore) {
             val first = candidates.firstOrNull()?.jsonObject
             val parts = first?.get("content")?.jsonObject?.get("parts")?.jsonArray
                 ?: return@execute null
+            // Skip parts flagged as thoughts: a reasoning model spends its whole
+            // budget thinking, and those parts carry the reasoning text, not an
+            // answer. Including them would surface the model's private scratch
+            // work as the scenario.
             parts.mapNotNull { part ->
-                part.jsonObject.str("text")
+                val obj = part.jsonObject
+                if (obj.str("thought") == "true") return@mapNotNull null
+                obj.str("text")
             }.joinToString("").trim().takeIf { it.isNotEmpty() }
-                ?: first.str("finishReason")
+            // NOTE: deliberately NOT falling back to finishReason here. Doing so
+            // returned the literal string "MAX_TOKENS" as if it were the model's
+            // answer, and the "no text" guard then had nothing left to report.
         }
     }
 
@@ -382,8 +411,9 @@ class AiClient(private val settings: SettingsStore) {
             ?: root["candidates"]?.jsonArray?.firstOrNull()?.jsonObject?.str("finishReason")
         return when {
             reason == null -> ". Check the model name matches this provider"
-            reason.contains("length", true) ->
-                ". The response hit the token limit — try a shorter brief or a larger token setting"
+            reason.contains("length", true) || reason.contains("max_token", true) ->
+                ". The model ran out of output tokens before writing an answer — " +
+                "raise the token limit in Settings, or ask for something shorter"
             reason.contains("filter", true) || reason.contains("safety", true) ->
                 ". The provider's content filter stopped it — try rephrasing the brief"
             reason.contains("tool", true) || reason.contains("function", true) ->

@@ -11,6 +11,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Explore
 import androidx.compose.material.icons.filled.Science
+import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material.icons.filled.VideoLibrary
 import androidx.compose.material3.Icon
@@ -31,6 +32,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.ember.companion.ui.discover.DiscoverScreen
 import com.ember.companion.ui.lab.ScenarioLabScreen
 import com.ember.companion.ui.library.LibraryScreen
+import com.ember.companion.ui.search.SearchScreen
 import com.ember.companion.ui.settings.SettingsScreen
 
 import androidx.activity.compose.BackHandler
@@ -122,6 +124,7 @@ fun EmberRoot(vm: EmberViewModel) {
             Box(Modifier.fillMaxSize()) {
                 when (currentTab) {
                     Tab.DISCOVER -> DiscoverScreen(vm = vm, contentPadding = screenPadding)
+                    Tab.SEARCH -> SearchScreen(vm = vm, contentPadding = screenPadding)
                     Tab.LIBRARY -> LibraryScreen(vm = vm, contentPadding = screenPadding)
                     Tab.LAB -> ScenarioLabScreen(vm = vm, contentPadding = screenPadding)
                     Tab.SETTINGS -> SettingsScreen(vm = vm, contentPadding = screenPadding)
@@ -133,6 +136,7 @@ fun EmberRoot(vm: EmberViewModel) {
 
 private fun Tab.icon(): ImageVector = when (this) {
     Tab.DISCOVER -> Icons.Filled.Explore
+    Tab.SEARCH -> Icons.Filled.Search
     Tab.LIBRARY -> Icons.Filled.VideoLibrary
     Tab.LAB -> Icons.Filled.Science
     Tab.SETTINGS -> Icons.Filled.Tune

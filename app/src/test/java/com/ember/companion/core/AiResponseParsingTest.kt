@@ -207,17 +207,25 @@ class AiResponseParsingTest {
 
     @Test
     fun `reasoning model detection correctly identifies o1 and o3 models`() {
-        assertTrue(isOpenAiReasoningModel("o1"))
-        assertTrue(isOpenAiReasoningModel("o1-mini"))
-        assertTrue(isOpenAiReasoningModel("o1-preview"))
-        assertTrue(isOpenAiReasoningModel("o3-mini"))
-        assertTrue(isOpenAiReasoningModel("o3"))
-        assertTrue(isOpenAiReasoningModel("o4-preview"))
+        assertTrue(isReasoningModel("o1"))
+        assertTrue(isReasoningModel("o1-mini"))
+        assertTrue(isReasoningModel("o1-preview"))
+        assertTrue(isReasoningModel("o3-mini"))
+        assertTrue(isReasoningModel("o3"))
+        assertTrue(isReasoningModel("o4-preview"))
 
-        assertFalse(isOpenAiReasoningModel("gpt-4o"))
-        assertFalse(isOpenAiReasoningModel("gpt-4o-mini"))
-        assertFalse(isOpenAiReasoningModel("claude-3-5-sonnet-20241022"))
-        assertFalse(isOpenAiReasoningModel("gemini-2.5-flash"))
+        assertFalse(isReasoningModel("gpt-4o"))
+        assertFalse(isReasoningModel("gpt-4o-mini"))
+        assertFalse(isReasoningModel("claude-3-5-sonnet-20241022"))
+        assertFalse(isReasoningModel("gemini-2.5-flash"))
+        // OpenRouter serves reasoning models under other names; missing these
+        // left them on the wrong token parameter and truncated their replies.
+        assertTrue(isReasoningModel("deepseek/deepseek-r1"))
+        assertTrue(isReasoningModel("deepseek/deepseek-r1:free"))
+        assertTrue(isReasoningModel("qwen/qwq-32b"))
+        assertTrue(isReasoningModel("some-model-thinking-v2"))
+        assertFalse(isReasoningModel("meta-llama/llama-3.3-70b-instruct"))
+        assertFalse(isReasoningModel("mistralai/mistral-large"))
     }
 
     @Test

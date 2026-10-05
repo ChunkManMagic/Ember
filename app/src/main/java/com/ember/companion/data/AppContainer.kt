@@ -27,6 +27,7 @@ class AppContainer(context: Context) {
     val settings: SettingsStore by lazy { SettingsStore(app) }
     val vpnMonitor: VpnMonitor by lazy { VpnMonitor(app) }
     val aiClient: AiClient by lazy { AiClient(settings) }
+    val searchClient: com.ember.companion.core.SearchClient by lazy { com.ember.companion.core.SearchClient(settings) }
     val veniceImageClient: com.ember.companion.core.VeniceImageClient by lazy { com.ember.companion.core.VeniceImageClient() }
 
     val mediaDao: MediaDao by lazy { db.mediaDao() }

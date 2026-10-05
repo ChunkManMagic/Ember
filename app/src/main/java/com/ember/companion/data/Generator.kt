@@ -389,6 +389,44 @@ object BriefMarkdownParser {
         }
     }
 
+    /**
+     * Canonical slot keys, with the words authors actually use for them.
+     *
+     * The parser used to match `##` headings by exact lowercase string, so a
+     * reply headed `## Characters` or `## Scene` had its entire section silently
+     * dropped and replaced with hardcoded filler like "An intimate setting" —
+     * which is precisely how a real answer turned into a pile of unrelated
+     * default phrases. Matching on meaning fixes that at the source.
+     */
+    private val SECTION_ALIASES: Map<String, Set<String>> = mapOf(
+        "setting" to setOf("setting", "settings", "place", "location", "where", "environment", "setting & place"),
+        "cast" to setOf("cast", "characters", "character", "who", "players", "people", "the cast", "cast list"),
+        "frame" to setOf("frame", "premise", "framing", "situation", "concept", "the frame", "scenario frame", "setup"),
+        "open" to setOf("open", "opening", "opening scene", "start", "hook", "scene", "the open", "opening beat"),
+        "beats" to setOf("beats", "beat", "progression", "escalation", "sequence", "story beats", "the beats", "structure"),
+        "twist" to setOf("optional twist", "twist", "turn", "shift", "complication", "variation"),
+        "close" to setOf("close", "closing", "end", "ending", "resolution", "aftermath", "the close", "payoff"),
+    )
+
+    /** Best-effort canonical key for a heading the model wrote. */
+    private fun canonicalSection(rawHeading: String): String {
+        val heading = rawHeading.trim().lowercase().trim('#', ':', ' ', '*')
+        if (heading.isEmpty()) return ""
+        // Exact alias first, so "close" never resolves to "complication".
+        SECTION_ALIASES.forEach { (key, aliases) ->
+            if (heading in aliases) return key
+        }
+        // Then containment, longest alias first so a specific heading wins over
+        // a generic one ("opening scene" over "open").
+        SECTION_ALIASES.forEach { (key, aliases) ->
+            val hit = aliases.filter { alias ->
+                alias.length >= 4 && (heading.contains(alias) || alias.contains(heading) && heading.length >= 4)
+            }.maxByOrNull { it.length }
+            if (hit != null) return key
+        }
+        return ""
+    }
+
     fun parse(markdown: String, defaultPremise: String, dials: Dials): Brief {
         val cleanMd = markdown.trim()
             .removePrefix("```markdown").removePrefix("```")
@@ -405,14 +443,25 @@ object BriefMarkdownParser {
                 title = trimmed.removePrefix("# ").trim()
                 continue
             }
-            if (trimmed.startsWith("## ")) {
-                currentSection = trimmed.removePrefix("## ").trim().lowercase()
-                sections.putIfAbsent(currentSection, mutableListOf())
+            if (trimmed.startsWith("## ") || trimmed.startsWith("### ")) {
+                // An unrecognised heading still collects its own lines, so
+                // nothing the model wrote is thrown away outright.
+                val raw = trimmed.trimStart('#').trim()
+                val canonical = canonicalSection(raw)
+                currentSection = canonical.ifEmpty { canonicalSection(raw) }
+                sections.putIfAbsent(currentSection.ifEmpty { raw.lowercase() }, mutableListOf())
                 continue
             }
             if (currentSection.isNotEmpty() && trimmed.isNotEmpty()) {
                 sections[currentSection]?.add(trimmed)
             }
+        }
+
+        // The twist slot is optional in the reply but its absence must not shift
+        // every other section, so resolve aliases once and read canonically.
+        fun section(vararg names: String): List<String> {
+            for (n in names) sections[canonicalSection(n)]?.let { if (it.isNotEmpty()) return it }
+            return emptyList()
         }
 
         if (title.isBlank()) {
@@ -453,62 +502,68 @@ object BriefMarkdownParser {
             ),
         )
 
-        val settingLines = sections["setting"].orEmpty()
+        val settingLines = section("setting")
         val settingMap = parseKeyValueLines(settingLines)
+        // Blank rather than a generic default: a made-up "An intimate setting"
+        // next to four real values is what makes a parsed brief read as noise.
+        // An empty field is honest and visibly needs filling.
         slots.add(
             BriefSlot(
                 "setting", "Setting",
                 listOf(
-                    Part("place", "Place", settingMap["place"] ?: "An intimate setting", bank = "places"),
-                    Part("time", "Time", settingMap["time"] ?: "Late evening", bank = "times"),
-                    Part("weather", "Weather", settingMap["weather"] ?: "Quiet outside", bank = "weather"),
-                    Part("air", "Air", settingMap["air"] ?: "Heavy with anticipation", bank = "atmosphere"),
-                    Part("texture", "Texture", settingMap["texture"] ?: "Subtle ambient sounds", bank = "sensory"),
+                    Part("place", "Place", settingMap.value("place", "location", "setting") ?: "", bank = "places"),
+                    Part("time", "Time", settingMap.value("time", "when") ?: "", bank = "times"),
+                    Part("weather", "Weather", settingMap.value("weather") ?: "", bank = "weather"),
+                    Part("air", "Air", settingMap.value("air", "atmosphere", "mood") ?: "", bank = "atmosphere"),
+                    Part("texture", "Texture", settingMap.value("texture", "sensory", "sounds", "smells") ?: "", bank = "sensory"),
                 ),
             ),
         )
 
-        val castLines = sections["cast"].orEmpty()
+        val castLines = section("cast")
         slots.add(parseCastSlot(castLines))
 
-        val frameLines = sections["frame"].orEmpty()
+        val frameLines = section("frame")
         val frameMap = parseKeyValueLines(frameLines)
         slots.add(
             BriefSlot(
                 "frame", "Frame",
                 listOf(
-                    Part("framing", "Framing", frameMap["framing"] ?: "An unexpected encounter", bank = "framings"),
-                    Part("power", "Power", frameMap["power"] ?: Dials.POWER[dials.power], bank = "powerBalances"),
-                    Part("tension", "Tension", frameMap["tension"] ?: "Unspoken feelings", bank = "tensions"),
-                    Part("reveal", "Reveals to", frameMap["reveals to"] ?: frameMap["reveal"] ?: "A secret kept too long", bank = "confidences"),
-                    Part("register", "Register", frameMap["register"] ?: Banks.registers[dials.explicitness], bank = "registers"),
-                    Part("pacing", "Pacing", frameMap["pacing"] ?: Banks.pacingNotes[dials.pace], bank = "pacingNotes"),
-                    Part("pov", "POV", frameMap["pov"] ?: Dials.POV[dials.pov], bank = "pov"),
+                    Part("framing", "Framing", frameMap.value("framing", "premise", "frame", "concept", "situation") ?: "", bank = "framings"),
+                    Part("power", "Power", frameMap.value("power", "power balance", "dynamic") ?: "", bank = "powerBalances"),
+                    Part("tension", "Tension", frameMap.value("tension", "stakes", "conflict") ?: "", bank = "tensions"),
+                    Part("reveal", "Reveals to", frameMap.value("reveals to", "reveal", "risk", "at stake") ?: "", bank = "confidences"),
+                    Part("register", "Register", frameMap.value("register", "tone", "explicitness") ?: "", bank = "registers"),
+                    Part("pacing", "Pacing", frameMap.value("pacing", "pace", "rhythm") ?: "", bank = "pacingNotes"),
+                    Part("pov", "POV", frameMap.value("pov", "point of view", "perspective") ?: "", bank = "pov"),
                 ),
             ),
         )
 
-        val openText = sections["open"].orEmpty().joinToString("\n").ifBlank { "The scene begins in quiet focus." }
+        val openText = section("open").joinToString("\n").trim()
         slots.add(BriefSlot("open", "Open", listOf(Part("open", "", openText, bank = "openers"))))
 
-        val beatsLines = sections["beats"].orEmpty()
+
+        val beatsLines = section("beats")
         slots.add(parseBeatsSlot(beatsLines))
 
-        val twistLines = sections["optional twist"] ?: sections["twist"]
-        if (twistLines != null) {
+        val twistLines = section("twist")
+        if (twistLines.isNotEmpty()) {
             val twistText = twistLines.joinToString("\n").trim()
             if (twistText.isNotBlank()) {
                 slots.add(BriefSlot("twist", "Optional twist", listOf(Part("twist", "", twistText, bank = "twists"))))
             }
         }
 
-        val closeLines = sections["close"].orEmpty()
-        val closeText = closeLines.joinToString("\n").ifBlank { "A quiet realization settles." }
+        val closeLines = section("close")
+        val closeText = closeLines.joinToString("\n").trim()
         slots.add(
             BriefSlot(
                 "close", "Close",
                 listOf(
                     Part("close", "", closeText, bank = "closers"),
+                    // The close note is Ember's own pacing guidance, not something
+                    // the model wrote, so it stays filled deliberately.
                     Part("closeNote", "", Banks.closeNotes[dials.explicitness], bank = "closeNotes"),
                 ),
             ),
@@ -602,78 +657,126 @@ object BriefMarkdownParser {
         return ""
     }
 
+    /**
+     * Reads `Label: value` lines, tolerating the shapes models actually write.
+     *
+     * Bold headings (`**Place:** ...`), bullets, and trailing punctuation all
+     * occur; a strict `indexOf(':')` pass dropped those lines and left the
+     * section full of hardcoded defaults.
+     */
     private fun parseKeyValueLines(lines: List<String>): Map<String, String> {
         val map = mutableMapOf<String, String>()
-        for (line in lines) {
+        for (raw in lines) {
+            val line = raw.trim().removePrefix("·").removePrefix("-").removePrefix("*").trim()
+            if (line.isEmpty()) continue
             val colon = line.indexOf(':')
-            if (colon > 0) {
-                val k = line.substring(0, colon).trim().removePrefix("·").removePrefix("-").removePrefix("*").trim().lowercase()
-                val v = line.substring(colon + 1).trim()
-                map[k] = v
-            }
+            if (colon <= 0) continue
+            var key = line.substring(0, colon).trim()
+            // Strip markdown emphasis and any trailing label characters.
+            key = key.replace("*", "").replace("**", "").trim().trimEnd('.', ',')
+            val value = line.substring(colon + 1).trim().trimStart('*').trim()
+            if (key.isEmpty() || value.isEmpty()) continue
+            map[key.lowercase()] = value
         }
         return map
     }
 
+    /** Reads a labelled field, tolerating emphasis and punctuation. */
+    private fun Map<String, String>.value(vararg names: String): String? =
+        names.firstNotNullOfOrNull { n -> this[n.lowercase()] }
+
     private fun parseCastSlot(lines: List<String>): BriefSlot {
-        fun extractField(subLines: List<String>, label: String): String {
-            val match = subLines.firstOrNull { it.contains(label, ignoreCase = true) } ?: return ""
-            return cleanValue(match.substringAfter(":").trim(), label)
+        /**
+         * Reads a labelled field from a character's lines.
+         *
+         * Falls back to the first non-heading line for the name, because models
+         * routinely write the name as a bare line rather than `Name:`.
+         */
+        fun field(subLines: List<String>, vararg labels: String): String {
+            for (label in labels) {
+                val hit = subLines.firstOrNull { line ->
+                    val bare = line.trim().removePrefix("·").removePrefix("-").removePrefix("*").trim()
+                    bare.startsWith(label, ignoreCase = true) ||
+                        bare.startsWith("**$label**", ignoreCase = true)
+                } ?: continue
+                val after = hit.substringAfter(":", "").replace("*", "").trim()
+                if (after.isNotBlank()) return after
+            }
+            return ""
+        }
+
+        /**
+         * First line that looks like content rather than a sub-heading.
+         *
+         * `substringAfter` is called with NO missing-delimiter argument on
+         * purpose: passing "" as the fallback returns "" for a line with no
+         * colon, which is exactly the bare-name line this exists to capture.
+         */
+        fun firstContent(subLines: List<String>): String = subLines.firstOrNull { line ->
+            val bare = line.trim().removePrefix("·").removePrefix("-").removePrefix("*").trim()
+            bare.isNotEmpty() && !bare.endsWith(':') && !bare.equals("Character A", ignoreCase = true) &&
+                !bare.equals("Character B", ignoreCase = true)
+        }?.substringAfter(":")?.replace("*", "")?.trim().orEmpty()
+
+        // Split on whichever character marker was used, or fall back to halves.
+        // "Character A: Name: Maren" puts the marker and the label on one line;
+        // split it so the label search sees a plain "Name:" line.
+        val lines = lines.flatMap { line ->
+            val marker = Regex("^\\s*(Character\\s+[AB])\\s*[:\\-]\\s*(.+)$", RegexOption.IGNORE_CASE).find(line)
+            if (marker != null && marker.groupValues[2].contains(':')) {
+                listOf(marker.groupValues[1], marker.groupValues[2])
+            } else {
+                listOf(line)
+            }
         }
 
         val charBIndex = lines.indexOfFirst { it.contains("Character B", ignoreCase = true) }
         val charALines = if (charBIndex != -1) lines.subList(0, charBIndex) else lines.take(lines.size / 2)
         val charBLines = if (charBIndex != -1) lines.subList(charBIndex, lines.size) else lines.drop(charALines.size)
 
-        val nameA = charALines.firstOrNull { it.contains("Character A", ignoreCase = true) }
-            ?.substringAfter(":")?.trim()
-            ?: charALines.firstOrNull { !it.startsWith("·") && !it.startsWith("-") && !it.startsWith("*") }
-                ?.substringAfter(":")?.trim()
-            ?: "Maren Aldiss"
-        val ageA = extractField(charALines, "Age").ifBlank { "Mid-twenties" }
-        val roleA = extractField(charALines, "Role").ifBlank { "Protagonist" }
-
-        val nameB = charBLines.firstOrNull { it.contains("Character B", ignoreCase = true) }
-            ?.substringAfter(":")?.trim()
-            ?: charBLines.firstOrNull { !it.startsWith("·") && !it.startsWith("-") && !it.startsWith("*") }
-                ?.substringAfter(":")?.trim()
-            ?: "Nura Barrow"
-        val ageB = extractField(charBLines, "Age").ifBlank { "Late twenties" }
-        val roleB = extractField(charBLines, "Role").ifBlank { "Partner" }
-
-        val parts = listOf(
-            Part("aname", "Name", nameA, bank = "names"),
-            Part("aage", "Age", ageA, bank = "ages"),
-            Part("arole", "Role", roleA, bank = "roles"),
-            Part("atrait", "", extractField(charALines, "Trait").ifBlank { "Unfailingly polite" }, bank = "traits", prefix = "  · "),
-            Part("awant", "", extractField(charALines, "Wants").ifBlank { "To be understood" }, bank = "wants", prefix = "  · wants: "),
-            Part("afear", "", extractField(charALines, "Fears").ifBlank { "Being vulnerable" }, bank = "fears", prefix = "  · fears: "),
-            Part("asecret", "", extractField(charALines, "Secret").ifBlank { "Knows the truth" }, bank = "secrets", prefix = "  · secret: "),
-            Part("aflaw", "", extractField(charALines, "Flaw").ifBlank { "Apologises reflexively" }, bank = "flaws", prefix = "  · flaw: "),
-            Part("gap", "", ""),
-            Part("bname", "Name", nameB, bank = "names"),
-            Part("bage", "Age", ageB, bank = "ages"),
-            Part("brole", "Role", roleB, bank = "roles"),
-            Part("btrait", "", extractField(charBLines, "Trait").ifBlank { "Direct and observant" }, bank = "traits", prefix = "  · "),
-            Part("bwant", "", extractField(charBLines, "Wants").ifBlank { "Honest closure" }, bank = "wants", prefix = "  · wants: "),
-            Part("bfear", "", extractField(charBLines, "Fears").ifBlank { "Being forgotten" }, bank = "fears", prefix = "  · fears: "),
-            Part("bsecret", "", extractField(charBLines, "Secret").ifBlank { "Has a plane ticket" }, bank = "secrets", prefix = "  · secret: "),
-            Part("bflaw", "", extractField(charBLines, "Flaw").ifBlank { "Cannot accept help" }, bank = "flaws", prefix = "  · flaw: "),
+        fun build(prefix: String, subLines: List<String>, roleLabel: String): List<Part> = listOf(
+            // ifBlank, not ?: — field() returns "" for a missing label, and an
+            // empty string is not null, so the fallback never ran and every
+            // character lost its name.
+            Part("${prefix}name", "Name", field(subLines, "Name").ifBlank { firstContent(subLines) }, bank = "names"),
+            Part("${prefix}age", "Age", field(subLines, "Age"), bank = "ages"),
+            Part("${prefix}role", "Role", field(subLines, "Role", roleLabel), bank = "roles"),
+            Part("${prefix}trait", "", field(subLines, "Trait", "Traits", "Voice"), bank = "traits", prefix = "  · "),
+            Part("${prefix}want", "", field(subLines, "Wants", "Want", "Goal"), bank = "wants", prefix = "  · wants: "),
+            Part("${prefix}fear", "", field(subLines, "Fears", "Fear", "Afraid"), bank = "fears", prefix = "  · fears: "),
+            Part("${prefix}secret", "", field(subLines, "Secret", "Hides", "Secret:"), bank = "secrets", prefix = "  · secret: "),
+            Part("${prefix}flaw", "", field(subLines, "Flaw", "Flaws", "Weakness"), bank = "flaws", prefix = "  · flaw: "),
         )
-        return BriefSlot("cast", "Cast", parts)
+
+        return BriefSlot(
+            "cast", "Cast",
+            build("a", charALines, "Role") + listOf(Part("gap", "", "")) + build("b", charBLines, "Role"),
+        )
     }
 
     private fun parseBeatsSlot(lines: List<String>): BriefSlot {
-        var b1 = "The situation becomes unavoidable."
-        var b2 = "A conflict forces them together."
-        var b3 = "The balance shifts permanently."
+        // Start empty: an invented "The situation becomes unavoidable" beside two
+        // real beats reads as a third unrelated event.
+        var b1 = ""
+        var b2 = ""
+        var b3 = ""
 
         for (line in lines) {
             val clean = cleanValue(line)
+            if (clean.isBlank()) continue
+            val bare = line.trim().removePrefix("·").removePrefix("-").removePrefix("*").trim()
             when {
-                line.startsWith("1.") || line.contains("Escalates", ignoreCase = true) -> b1 = clean
-                line.startsWith("2.") || line.contains("Complication", ignoreCase = true) -> b2 = clean
-                line.startsWith("3.") || line.contains("Turn", ignoreCase = true) -> b3 = clean
+                bare.startsWith("1.") || bare.startsWith("1)") || bare.contains("escalat", ignoreCase = true) ->
+                    if (b1.isBlank()) b1 = clean
+                bare.startsWith("2.") || bare.startsWith("2)") || bare.contains("complicat", ignoreCase = true) ->
+                    if (b2.isBlank()) b2 = clean
+                bare.startsWith("3.") || bare.startsWith("3)") || bare.contains("turn", ignoreCase = true) ->
+                    if (b3.isBlank()) b3 = clean
+                // Unnumbered extra beat: file it in the first empty slot rather
+                // than dropping what the model wrote.
+                b1.isBlank() -> b1 = clean
+                b2.isBlank() -> b2 = clean
+                b3.isBlank() -> b3 = clean
             }
         }
         return BriefSlot(

@@ -127,6 +127,13 @@ object CardPlatforms {
 
     val ALL: List<Platform> = listOf(
         Platform(
+            id = "personaforge",
+            label = "PersonaForge",
+            spec = CharacterCard.Spec.V2,
+            format = CardFormat.JSON,
+            note = "PersonaForge native story transfer format (schemaVersion: 1). Directly importable into PersonaForge Android & Web.",
+        ),
+        Platform(
             id = "sillytavern",
             label = "SillyTavern",
             spec = CharacterCard.Spec.V2,

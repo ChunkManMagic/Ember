@@ -81,6 +81,19 @@ class SettingsStore(context: Context) {
     private val _incognito = MutableStateFlow(prefs.getBoolean(KEY_INCOGNITO, false))
     val incognito: StateFlow<Boolean> = _incognito.asStateFlow()
 
+    // ---- local search service ---------------------------------------------
+    private val _searchHost = MutableStateFlow(prefs.getString(KEY_SEARCH_HOST, DEFAULT_SEARCH_HOST) ?: DEFAULT_SEARCH_HOST)
+    val searchHost: StateFlow<String> = _searchHost.asStateFlow()
+
+    private val _searchPort = MutableStateFlow(
+        runCatching { prefs.getString(KEY_SEARCH_PORT, null)?.toInt() ?: DEFAULT_SEARCH_PORT }
+            .getOrDefault(DEFAULT_SEARCH_PORT),
+    )
+    val searchPort: StateFlow<Int> = _searchPort.asStateFlow()
+
+    private val _searchToken = MutableStateFlow(prefs.getString(KEY_SEARCH_TOKEN, "") ?: "")
+    val searchToken: StateFlow<String> = _searchToken.asStateFlow()
+
     // ---- Lab steering persistence ------------------------------------------
     private val _labDials = MutableStateFlow(Dials(
         explicitness = prefs.getInt(KEY_LAB_EXPLICITNESS, 1).coerceIn(0, 2),
@@ -215,9 +228,27 @@ class SettingsStore(context: Context) {
         _desktopMode.value = enabled
     }
 
-    fun setIncognito(enabled: Boolean) {
+fun setIncognito(enabled: Boolean) {
         prefs.edit().putBoolean(KEY_INCOGNITO, enabled).apply()
         _incognito.value = enabled
+    }
+
+    fun setSearchHost(host: String) {
+        val clean = host.trim().ifEmpty { DEFAULT_SEARCH_HOST }
+        prefs.edit().putString(KEY_SEARCH_HOST, clean).apply()
+        _searchHost.value = clean
+    }
+
+    fun setSearchPort(port: Int) {
+        val clean = port.takeIf { it in 1..65535 } ?: DEFAULT_SEARCH_PORT
+        prefs.edit().putString(KEY_SEARCH_PORT, clean.toString()).apply()
+        _searchPort.value = clean
+    }
+
+    fun setSearchToken(token: String) {
+        val clean = token.trim()
+        prefs.edit().putString(KEY_SEARCH_TOKEN, clean).apply()
+        _searchToken.value = clean
     }
 
     // ---- Lab steering setters ----------------------------------------------
@@ -254,6 +285,85 @@ class SettingsStore(context: Context) {
     }
 
     /** Backs Settings' "Clear all Ember data". The age gate is deliberately kept. */
+    // ---- platform field drafts ---------------------------------------------
+    /**
+     * Per-platform field values, keyed `platformId|fieldKey`.
+     *
+     * Saved per platform on purpose: switching to Character.AI and typing a
+     * tagline, then back to SillyTavern and finding it blank is the exact
+     * friction this feature exists to remove. Kept in prefs rather than Room
+     * because it is small, transient working text, not library data.
+     */
+    private val _platformDrafts = MutableStateFlow(loadPlatformDrafts())
+    val platformDrafts: StateFlow<Map<String, String>> = _platformDrafts.asStateFlow()
+
+    private fun draftKey(platformId: String, fieldKey: String) = "$platformId|$fieldKey"
+
+    fun draftValue(platformId: String, fieldKey: String): String =
+        _platformDrafts.value[draftKey(platformId, fieldKey)].orEmpty()
+
+    fun setDraftValue(platformId: String, fieldKey: String, value: String) {
+        val key = draftKey(platformId, fieldKey)
+        val next = _platformDrafts.value.toMutableMap()
+        if (value.isBlank()) next.remove(key) else next[key] = value
+        prefs.edit().putString(KEY_PLATFORM_DRAFTS, encodeMap(next)).apply()
+        _platformDrafts.value = next
+    }
+
+    fun clearDrafts(platformId: String) {
+        val prefix = "$platformId|"
+        val next = _platformDrafts.value.filterKeys { !it.startsWith(prefix) }
+        prefs.edit().putString(KEY_PLATFORM_DRAFTS, encodeMap(next)).apply()
+        _platformDrafts.value = next
+    }
+
+    private fun loadPlatformDrafts(): Map<String, String> = runCatching {
+        val raw = prefs.getString(KEY_PLATFORM_DRAFTS, null) ?: return emptyMap()
+        val obj = org.json.JSONObject(raw)
+        obj.keys().asSequence().associateWith { obj.optString(it, "") }
+    }.getOrDefault(emptyMap())
+
+    /** Drafts are plain strings; JSON keeps any character legal in a value. */
+    private fun encodeMap(map: Map<String, String>): String {
+        val obj = org.json.JSONObject()
+        map.forEach { (k, v) -> obj.put(k, v) }
+        return obj.toString()
+    }
+
+    /** User-defined platform schemas, persisted so a fetched form survives a restart. */
+    private val _customSchemas = MutableStateFlow(loadCustomSchemas())
+    val customSchemas: StateFlow<List<com.ember.companion.data.PlatformSchema>> = _customSchemas.asStateFlow()
+
+    fun saveCustomSchema(schema: com.ember.companion.data.PlatformSchema) {
+        val next = (_customSchemas.value.filterNot { it.id == schema.id } + schema)
+        _customSchemas.value = next
+        persistCustomSchemas(next)
+    }
+
+    fun deleteCustomSchema(id: String) {
+        val next = _customSchemas.value.filterNot { it.id == id }
+        _customSchemas.value = next
+        persistCustomSchemas(next)
+        clearDrafts(id)
+    }
+
+    private fun persistCustomSchemas(list: List<com.ember.companion.data.PlatformSchema>) {
+        runCatching {
+            prefs.edit().putString(KEY_CUSTOM_SCHEMAS, encodeSchemas(list)).apply()
+        }
+    }
+
+    private fun loadCustomSchemas(): List<com.ember.companion.data.PlatformSchema> = runCatching {
+        val raw = prefs.getString(KEY_CUSTOM_SCHEMAS, null) ?: return emptyList()
+        val json = kotlinx.serialization.json.Json { ignoreUnknownKeys = true }
+        json.decodeFromString<List<com.ember.companion.data.PlatformSchema>>(raw)
+    }.getOrDefault(emptyList())
+
+    private fun encodeSchemas(list: List<com.ember.companion.data.PlatformSchema>): String = runCatching {
+        val serializer = kotlinx.serialization.serializer<List<com.ember.companion.data.PlatformSchema>>()
+        kotlinx.serialization.json.Json { encodeDefaults = true }.encodeToString(serializer, list)
+    }.getOrDefault("[]")
+
     fun resetAll() {
         prefs.edit().clear().apply()
         _aiEnabled.value = false
@@ -266,11 +376,16 @@ class SettingsStore(context: Context) {
         _blockThirdPartyCookies.value = true
         _desktopMode.value = false
         _incognito.value = false
+        _searchHost.value = DEFAULT_SEARCH_HOST
+        _searchPort.value = DEFAULT_SEARCH_PORT
+        _searchToken.value = ""
         _labDials.value = Dials()
         _labPremise.value = ""
         _labSeed.value = ""
         _labTaste.value = Banks.Taste()
         _labCustomBanks.value = Banks.Custom()
+        _platformDrafts.value = emptyMap()
+        _customSchemas.value = emptyList()
     }
 
     fun defaultBaseUrl(provider: AiProvider): String = Companion.defaultBaseUrl(provider)
@@ -295,6 +410,11 @@ class SettingsStore(context: Context) {
 
     companion object {
         const val DEFAULT_TEMPERATURE = 0.7f
+        const val DEFAULT_SEARCH_HOST = "127.0.0.1"
+        const val DEFAULT_SEARCH_PORT = 8791
+        private const val KEY_SEARCH_HOST = "search_host"
+        private const val KEY_SEARCH_PORT = "search_port"
+        private const val KEY_SEARCH_TOKEN = "search_token"
         private const val KEY_AI_TEMPERATURE = "ai_temperature"
         private const val KEY_AGE_GATE = "age_gate_passed"
         private const val KEY_AI_ENABLED = "ai_enabled"
@@ -307,6 +427,8 @@ class SettingsStore(context: Context) {
         private const val KEY_BLOCK_3P_COOKIES = "block_3p_cookies"
         private const val KEY_DESKTOP_MODE = "desktop_mode"
         private const val KEY_INCOGNITO = "incognito"
+        private const val KEY_PLATFORM_DRAFTS = "platform_drafts"
+        private const val KEY_CUSTOM_SCHEMAS = "custom_platform_schemas"
         private const val KEY_LAB_EXPLICITNESS = "lab_explicitness"
         private const val KEY_LAB_PACE = "lab_pace"
         private const val KEY_LAB_POWER = "lab_power"

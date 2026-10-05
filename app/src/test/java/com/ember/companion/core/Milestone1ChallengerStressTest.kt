@@ -53,7 +53,7 @@ class Milestone1ChallengerStressTest {
             "o4-preview",
         )
         for (m in reasoningModels) {
-            assertTrue("Expected reasoning model for: '$m'", isOpenAiReasoningModel(m))
+            assertTrue("Expected reasoning model for: '$m'", isReasoningModel(m))
         }
 
         val nonReasoningModels = listOf(
@@ -66,7 +66,7 @@ class Milestone1ChallengerStressTest {
             "text-davinci-003",
         )
         for (m in nonReasoningModels) {
-            assertFalse("Expected non-reasoning model for: '$m'", isOpenAiReasoningModel(m))
+            assertFalse("Expected non-reasoning model for: '$m'", isReasoningModel(m))
         }
     }
 

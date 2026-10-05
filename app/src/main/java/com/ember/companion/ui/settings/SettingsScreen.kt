@@ -76,6 +76,12 @@ fun SettingsScreen(vm: EmberViewModel, contentPadding: PaddingValues) {
     val aiTest by vm.aiTestState.collectAsStateWithLifecycle()
     val lastCrash by vm.lastCrashAt.collectAsStateWithLifecycle()
     val offscreenGuard by vm.settings.offscreenGuard.collectAsStateWithLifecycle()
+    val searchHost by vm.settings.searchHost.collectAsStateWithLifecycle()
+    val searchPort by vm.settings.searchPort.collectAsStateWithLifecycle()
+    val searchState by vm.search.collectAsStateWithLifecycle()
+
+    var hostDraft by remember(searchHost) { mutableStateOf(searchHost) }
+    var portDraft by remember(searchPort) { mutableStateOf(searchPort.toString()) }
 
     var keyDraft by remember { mutableStateOf("") }
     var showKey by remember { mutableStateOf(false) }
@@ -203,6 +209,70 @@ fun SettingsScreen(vm: EmberViewModel, contentPadding: PaddingValues) {
                     DetailLine("Crash reporting", "none")
                     DetailLine("Ember server", "does not exist")
                     DetailLine("Backups", "disabled")
+                }
+            }
+
+            // ---- multi-site search -----------------------------------------
+            SectionTitle("Multi-site search")
+            Card(
+                colors = CardDefaults.cardColors(
+                    containerColor = MaterialTheme.colorScheme.surface,
+                ),
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Text(
+                        "Search runs in a service inside Termux on this phone, not on a " +
+                            "server. That is deliberate: the sites Ember searches sit behind " +
+                            "bot protection that trusts a phone's network and refuses a " +
+                            "datacenter one, so the same search would fail from the cloud.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    DetailLine("Service", "${searchHost}:${searchPort}")
+                    Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                        OutlinedTextField(
+                            value = hostDraft,
+                            onValueChange = { hostDraft = it },
+                            label = { Text("Host") },
+                            singleLine = true,
+                            modifier = Modifier.weight(1f),
+                        )
+                        OutlinedTextField(
+                            value = portDraft,
+                            onValueChange = { portDraft = it.filter(Char::isDigit).take(5) },
+                            label = { Text("Port") },
+                            singleLine = true,
+                            modifier = Modifier.weight(1f),
+                        )
+                    }
+                    Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                        OutlinedButton(
+                            onClick = {
+                                vm.setSearchHost(hostDraft)
+                                vm.setSearchPort(portDraft.toIntOrNull() ?: 0)
+                            },
+                        ) {
+                            Text("Save")
+                        }
+                        OutlinedButton(onClick = { vm.testSearchService() }) {
+                            Text("Test connection")
+                        }
+                    }
+                    DetailLine("Health", when (searchState.serviceUp) {
+                        null -> "not checked"
+                        true -> "service is up"
+                        false -> "service is not answering"
+                    })
+                    HorizontalDivider()
+                    Text(
+                        "Run this in Termux, then leave it running:\n\n" +
+                            "~/ember-search/start.sh\n\n" +
+                            "Add sites by editing ~/ember-search/sites.json — the service " +
+                            "re-reads it without a restart.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
                 }
             }
 
@@ -551,6 +621,13 @@ fun SettingsScreen(vm: EmberViewModel, contentPadding: PaddingValues) {
                 Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     DetailLine("Version", com.ember.companion.BuildConfig.VERSION_NAME)
                     DetailLine("Package", com.ember.companion.BuildConfig.APPLICATION_ID)
+                    // An install that did not take is indistinguishable from a
+                    // bug that was never fixed, and that has cost more time
+                    // than it ever should. This says which build is running.
+                    DetailLine(
+                        "Build",
+                        com.ember.companion.BuildConfig.BUILD_STAMP,
+                    )
                     DetailLine(
                         "Key storage",
                         if (vm.settings.isKeyHardwareBacked) {
