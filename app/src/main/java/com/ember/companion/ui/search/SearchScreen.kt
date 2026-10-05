@@ -21,7 +21,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Download
-import androidx.compose.material.icons.filled.OpenInNew
+import androidx.compose.material.icons.automirrored.filled.OpenInNew
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.Card
@@ -310,7 +310,7 @@ private fun ResultRow(hit: SearchHit, onDownload: (SearchHit) -> Unit, onOpen: (
             }
             IconButton(onClick = { onOpen(hit) }) {
                 Icon(
-                    Icons.Filled.OpenInNew,
+                    Icons.AutoMirrored.Filled.OpenInNew,
                     contentDescription = "Open in the browser",
                     modifier = Modifier.size(20.dp),
                 )

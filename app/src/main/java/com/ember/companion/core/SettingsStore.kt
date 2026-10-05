@@ -284,7 +284,6 @@ fun setIncognito(enabled: Boolean) {
         _labCustomBanks.value = custom
     }
 
-    /** Backs Settings' "Clear all Ember data". The age gate is deliberately kept. */
     // ---- platform field drafts ---------------------------------------------
     /**
      * Per-platform field values, keyed `platformId|fieldKey`.
@@ -364,14 +363,28 @@ fun setIncognito(enabled: Boolean) {
         kotlinx.serialization.json.Json { encodeDefaults = true }.encodeToString(serializer, list)
     }.getOrDefault("[]")
 
+    /** Backs Settings' "Clear all Ember data"; the age gate survives it. */
     fun resetAll() {
+        // The age gate is an acknowledgement, not user data, so it survives a
+        // wipe. prefs.clear() would take the persisted flag with it and leave the
+        // in-memory flow disagreeing with disk, so it is written back below.
+        val ageGateStillPassed = _ageGatePassed.value
         prefs.edit().clear().apply()
+        if (ageGateStillPassed) {
+            prefs.edit().putBoolean(KEY_AGE_GATE, true).apply()
+        }
+        _ageGatePassed.value = ageGateStillPassed
         _aiEnabled.value = false
         _aiProvider.value = AiProvider.OPENAI
         _aiBaseUrl.value = defaultBaseUrl(AiProvider.OPENAI)
         _aiModel.value = defaultModel(AiProvider.OPENAI)
         _aiTemperature.value = DEFAULT_TEMPERATURE
         _aiHasKey.value = false
+        // prefs.clear() took the stored Venice key with it, so the in-memory flag
+        // has to follow. Leaving it true made Settings report a saved key while
+        // veniceApiKeyOrNull() returned null, and generation then failed with
+        // "Venice API key is missing" against a key the UI said was there.
+        _veniceHasKey.value = false
         _offscreenGuard.value = true
         _blockThirdPartyCookies.value = true
         _desktopMode.value = false

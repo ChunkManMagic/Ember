@@ -247,6 +247,11 @@ object HlsDownloader {
         }
         val body = client.newCall(builder.build()).execute().use { res ->
             if (!res.isSuccessful) return@use null
+            // A ranged request must come back 206. A server that ignores Range
+            // answers 200 with the *whole* resource, which used to be appended
+            // as if it were this one segment — the resource concatenated N times
+            // into a file that looked downloaded and played as garbage.
+            if (byteLength > 0L && res.code != 206) return@use null
             res.body?.bytes()
         } ?: return@runCatching null
 

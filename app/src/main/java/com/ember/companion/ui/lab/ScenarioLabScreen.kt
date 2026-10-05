@@ -41,11 +41,11 @@ import androidx.compose.material.icons.filled.ExpandLess
 import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.FavoriteBorder
-import androidx.compose.material.icons.filled.LibraryBooks
+import androidx.compose.material.icons.automirrored.filled.LibraryBooks
 import androidx.compose.material.icons.filled.Lightbulb
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.LockOpen
-import androidx.compose.material.icons.filled.MenuBook
+import androidx.compose.material.icons.automirrored.filled.MenuBook
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.PushPin
 import androidx.compose.material.icons.filled.Refresh
@@ -98,7 +98,6 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.material.icons.filled.ContentCopy
-import androidx.compose.material.icons.filled.Send
 import androidx.compose.material.icons.filled.Save
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
@@ -138,11 +137,6 @@ fun ScenarioLabScreen(vm: EmberViewModel, contentPadding: PaddingValues) {
     var editingPart by remember { mutableStateOf<Part?>(null) }
     var editingTitle by remember { mutableStateOf(false) }
     var addingPartSlotKey by remember { mutableStateOf<String?>(null) }
-    val screen by vm.currentScreen.collectAsStateWithLifecycle()
-    if (screen == "platformHelper") {
-        PlatformSelectionScreen(vm)
-        return
-    }
     Scaffold(
         topBar = {
             TopAppBar(
@@ -157,7 +151,7 @@ fun ScenarioLabScreen(vm: EmberViewModel, contentPadding: PaddingValues) {
                     }
                 },
                 actions = {
-                    IconButton(onClick = { vm.navigateToPlatformHelper() }) {
+                    IconButton(onClick = { showPlatformFields = true }) {
                         Icon(Icons.Filled.AutoAwesome, contentDescription = "Platform Helper")
                     }
                     IconButton(onClick = { banksDialog = true }) {
@@ -721,7 +715,7 @@ private fun BuilderPane(
                             onClick = { vm.setLabViewMode(LabViewMode.READING) },
                             shape = SegmentedButtonDefaults.itemShape(0, 2),
                         ) {
-                            Icon(Icons.Filled.MenuBook, contentDescription = null, Modifier.size(15.dp))
+                            Icon(Icons.AutoMirrored.Filled.MenuBook, contentDescription = null, Modifier.size(15.dp))
                             Spacer(Modifier.width(4.dp))
                             Text("Reading", style = MaterialTheme.typography.labelSmall)
                         }
@@ -895,7 +889,7 @@ private fun ReadingViewCard(
                     modifier = Modifier.weight(1f),
                     shape = RoundedCornerShape(12.dp),
                 ) {
-                    Icon(Icons.Filled.LibraryBooks, null, Modifier.size(16.dp))
+                    Icon(Icons.AutoMirrored.Filled.LibraryBooks, null, Modifier.size(16.dp))
                     Spacer(Modifier.width(4.dp))
                     Text("Save to Lab")
                 }
@@ -1052,7 +1046,7 @@ private fun GeneratePane(
                             onClick = { vm.setLabViewMode(LabViewMode.READING) },
                             shape = SegmentedButtonDefaults.itemShape(0, 2),
                         ) {
-                            Icon(Icons.Filled.MenuBook, contentDescription = null, Modifier.size(15.dp))
+                            Icon(Icons.AutoMirrored.Filled.MenuBook, contentDescription = null, Modifier.size(15.dp))
                             Spacer(Modifier.width(4.dp))
                             Text("Reading", style = MaterialTheme.typography.labelSmall)
                         }
@@ -1159,7 +1153,7 @@ private fun GeneratePane(
                             enabled = aiEnabled && aiHasKey && !lab.aiBusy &&
                                 lab.aiPrompt.isNotBlank(),
                         ) {
-                            Icon(Icons.Filled.Send, null, Modifier.size(16.dp))
+                            Icon(Icons.AutoMirrored.Filled.Send, null, Modifier.size(16.dp))
                             Spacer(Modifier.width(6.dp))
                             Text("Send")
                         }
@@ -1914,7 +1908,7 @@ private fun LazyListScope.tuningSlotsContent(
     item {
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             Button(onClick = onSave, modifier = Modifier.weight(1f)) {
-                Icon(Icons.Filled.LibraryBooks, null, Modifier.size(17.dp))
+                Icon(Icons.AutoMirrored.Filled.LibraryBooks, null, Modifier.size(17.dp))
                 Spacer(Modifier.width(6.dp))
                 Text("Save to Lab")
             }

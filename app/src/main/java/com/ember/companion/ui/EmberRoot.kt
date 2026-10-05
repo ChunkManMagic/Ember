@@ -48,12 +48,19 @@ import androidx.compose.ui.unit.dp
 fun EmberRoot(vm: EmberViewModel) {
     val tab by vm.tab.collectAsStateWithLifecycle()
     val message by vm.snackMessage.collectAsStateWithLifecycle()
+    val chatOpen by vm.chatOpen.collectAsStateWithLifecycle()
     val snackHost = remember { SnackbarHostState() }
     val direction = LocalLayoutDirection.current
 
     // Back handling for tab navigation backstack
     BackHandler(enabled = vm.canNavigateBackTab()) {
         vm.navigateBackTab()
+    }
+
+    // The chat overlay owns the back gesture while it is up, otherwise back would
+    // walk the tab stack out from under it.
+    BackHandler(enabled = chatOpen) {
+        vm.closeChat()
     }
 
     // Lets the Lab share text without the view model holding a Context.
@@ -83,53 +90,63 @@ fun EmberRoot(vm: EmberViewModel) {
         vm.consumeMessage()
     }
 
-    Scaffold(
-        bottomBar = {
-            NavigationBar(
-                tonalElevation = 4.dp,
-            ) {
-                Tab.entries.forEach { entry ->
-                    NavigationBarItem(
-                        selected = tab == entry,
-                        onClick = { vm.selectTab(entry) },
-                        icon = { Icon(entry.icon(), contentDescription = null) },
-                        label = { Text(entry.label, maxLines = 1) },
-                    )
+    // Chat is layered over the Scaffold rather than inside it: inside, the
+    // bottom NavigationBar is drawn last and would sit on top of the composer.
+    Box(Modifier.fillMaxSize()) {
+        Scaffold(
+            bottomBar = {
+                NavigationBar(
+                    tonalElevation = 4.dp,
+                ) {
+                    Tab.entries.forEach { entry ->
+                        NavigationBarItem(
+                            selected = tab == entry,
+                            onClick = { vm.selectTab(entry) },
+                            icon = { Icon(entry.icon(), contentDescription = null) },
+                            label = { Text(entry.label, maxLines = 1) },
+                        )
+                    }
                 }
-            }
-        },
-        snackbarHost = { SnackbarHost(snackHost) },
-    ) { inner ->
-        // Screens get bottom padding for the NavigationBar and horizontal insets.
-        // Top padding is set to 0.dp so child screen TopAppBars handle their own
-        // status bar insets without double-padding.
-        val screenPadding = PaddingValues(
-            top = 0.dp,
-            bottom = inner.calculateBottomPadding(),
-            start = inner.calculateStartPadding(direction),
-            end = inner.calculateEndPadding(direction),
-        )
-
-        AnimatedContent(
-            targetState = tab,
-            transitionSpec = {
-                val forward = targetState.ordinal > initialState.ordinal
-                val direction = if (forward) AnimatedContentTransitionScope.SlideDirection.Left else AnimatedContentTransitionScope.SlideDirection.Right
-                (slideIntoContainer(direction, animationSpec = tween(220)) + fadeIn(animationSpec = tween(220)))
-                    .togetherWith(slideOutOfContainer(direction, animationSpec = tween(220)) + fadeOut(animationSpec = tween(220)))
             },
-            label = "TabAnimatedContent",
-            modifier = Modifier.fillMaxSize(),
-        ) { currentTab ->
-            Box(Modifier.fillMaxSize()) {
-                when (currentTab) {
-                    Tab.DISCOVER -> DiscoverScreen(vm = vm, contentPadding = screenPadding)
-                    Tab.SEARCH -> SearchScreen(vm = vm, contentPadding = screenPadding)
-                    Tab.LIBRARY -> LibraryScreen(vm = vm, contentPadding = screenPadding)
-                    Tab.LAB -> ScenarioLabScreen(vm = vm, contentPadding = screenPadding)
-                    Tab.SETTINGS -> SettingsScreen(vm = vm, contentPadding = screenPadding)
+            snackbarHost = { SnackbarHost(snackHost) },
+        ) { inner ->
+            // Screens get bottom padding for the NavigationBar and horizontal insets.
+            // Top padding is set to 0.dp so child screen TopAppBars handle their own
+            // status bar insets without double-padding.
+            val screenPadding = PaddingValues(
+                top = 0.dp,
+                bottom = inner.calculateBottomPadding(),
+                start = inner.calculateStartPadding(direction),
+                end = inner.calculateEndPadding(direction),
+            )
+
+            AnimatedContent(
+                targetState = tab,
+                transitionSpec = {
+                    val forward = targetState.ordinal > initialState.ordinal
+                    val direction = if (forward) AnimatedContentTransitionScope.SlideDirection.Left else AnimatedContentTransitionScope.SlideDirection.Right
+                    (slideIntoContainer(direction, animationSpec = tween(220)) + fadeIn(animationSpec = tween(220)))
+                        .togetherWith(slideOutOfContainer(direction, animationSpec = tween(220)) + fadeOut(animationSpec = tween(220)))
+                },
+                label = "TabAnimatedContent",
+                modifier = Modifier.fillMaxSize(),
+            ) { currentTab ->
+                Box(Modifier.fillMaxSize()) {
+                    when (currentTab) {
+                        Tab.DISCOVER -> DiscoverScreen(vm = vm, contentPadding = screenPadding)
+                        Tab.SEARCH -> SearchScreen(vm = vm, contentPadding = screenPadding)
+                        Tab.LIBRARY -> LibraryScreen(vm = vm, contentPadding = screenPadding)
+                        Tab.LAB -> ScenarioLabScreen(vm = vm, contentPadding = screenPadding)
+                        Tab.SETTINGS -> SettingsScreen(vm = vm, contentPadding = screenPadding)
+                    }
                 }
             }
+        }
+
+        // Launched from Settings, so the tab underneath keeps its own state and
+        // scroll position while the chat is open.
+        if (chatOpen) {
+            ChatScreen(onBack = { vm.closeChat() })
         }
     }
 }

@@ -244,6 +244,15 @@ class EmberViewModel(private val container: AppContainer) : ViewModel() {
     fun showMessage(message: String) { snackMessage.value = message }
     fun consumeMessage() { snackMessage.value = null }
 
+    // ---- companion chat overlay ------------------------------------------
+    //
+    // Chat is presented as a full-screen overlay rather than a tab on purpose:
+    // it is a separate side feature, and adding a sixth bottom-bar item would
+    // have changed navigation that every other screen already depends on.
+    val chatOpen = MutableStateFlow(false)
+    fun openChat() { chatOpen.value = true }
+    fun closeChat() { chatOpen.value = false }
+
     fun refreshVpn() { _vpnState.value = container.vpnMonitor.current() }
 
     // ---- discover --------------------------------------------------------
@@ -805,9 +814,12 @@ fun saveVeniceImage(context: android.content.Context) {
                     val internalName = java.util.UUID.randomUUID().toString() + ".webp"
                     val internalFile = java.io.File(context.filesDir, "media/" + internalName)
                     internalFile.parentFile?.mkdirs()
-                    val out = java.io.FileOutputStream(internalFile)
-                    bmp.compress(android.graphics.Bitmap.CompressFormat.WEBP, 100, out)
-                    out.close()
+                    // `use` so an encoder throw (OOM, a null internal pointer in the
+                    // platform encoder) closes the stream instead of leaking it and
+                    // leaving a truncated .webp on disk that still looks saved.
+                    java.io.FileOutputStream(internalFile).use { out ->
+                        bmp.compress(android.graphics.Bitmap.CompressFormat.WEBP, 100, out)
+                    }
                     
                     val item = com.ember.companion.data.db.MediaItem(
                         id = 0,
@@ -2485,15 +2497,13 @@ fun saveVeniceImage(context: android.content.Context) {
         if (extras.useCustom) {
             val format = extras.custom.format
             val spec = extras.custom.spec
+            val name = safeFileName(currentCard().name).ifBlank { "ember-card-custom" }
             when (format) {
-                CardFormat.PNG -> {
-                    val name = safeFileName(currentCard().name).ifBlank { "ember-card-custom" }
-                    writeCard("$name.png", CharacterCard.encodePng(currentCard(), spec))
+                CardFormat.PNG -> encodeCardAsync("$name.png") {
+                    CharacterCard.encodePng(currentCard(), spec)
                 }
-                CardFormat.JSON -> {
-                    val name = safeFileName(currentCard().name).ifBlank { "ember-card-custom" }
-                    val text = extras.custom.toJsonText(currentCard()).toByteArray(Charsets.UTF_8)
-                    writeCard("$name.json", text)
+                CardFormat.JSON -> encodeCardAsync("$name.json") {
+                    extras.custom.toJsonText(currentCard()).toByteArray(Charsets.UTF_8)
                 }
                 CardFormat.CLIPBOARD -> showMessage("Copy the fields instead")
             }
@@ -2504,16 +2514,34 @@ fun saveVeniceImage(context: android.content.Context) {
             showMessage("This platform has no card import")
             return
         }
+        val name = safeFileName(currentCard().name).ifBlank { "ember-card" }
         when (platform.format) {
-            CardFormat.PNG -> {
-                val name = safeFileName(currentCard().name).ifBlank { "ember-card" }
-                writeCard("$name.png", CharacterCard.encodePng(currentCard(), platform.spec))
+            CardFormat.PNG -> encodeCardAsync("$name.png") {
+                CharacterCard.encodePng(currentCard(), platform.spec)
             }
-            CardFormat.JSON -> {
-                val name = safeFileName(currentCard().name).ifBlank { "ember-card" }
-                writeCard("$name.json", CharacterCard.encodeJson(currentCard(), platform.spec))
+            CardFormat.JSON -> encodeCardAsync("$name.json") {
+                CharacterCard.encodeJson(currentCard(), platform.spec)
             }
             CardFormat.CLIPBOARD -> showMessage("Copy the fields instead")
+        }
+    }
+
+    /**
+     * Builds the card off the main thread, then opens the picker.
+     *
+     * encodePng assembles a 512x512 raw scanline buffer and deflates it, which
+     * used to happen inline in the click handler and visibly froze the UI. Only
+     * the picker launch has to be back on the main thread.
+     */
+    private fun encodeCardAsync(fileName: String, produce: () -> ByteArray) {
+        viewModelScope.launch {
+            val bytes = withContext(Dispatchers.IO) {
+                runCatching { produce() }
+            }.getOrElse { error ->
+                showMessage("Could not build the card: ${error.message ?: "unknown error"}")
+                return@launch
+            }
+            writeCard(fileName, bytes)
         }
     }
 
@@ -2530,13 +2558,21 @@ fun saveVeniceImage(context: android.content.Context) {
     fun writePendingCard(uri: Uri) {
         val pending = pendingCard ?: return
         pendingCard = null
-        runCatching {
-            container.appContext.contentResolver.openOutputStream(uri)?.use { it.write(pending.second) }
-                ?: error("could not open the chosen file")
-        }.onSuccess {
-            showMessage("Saved ${pending.first}")
-        }.onFailure {
-            showMessage("Save failed: ${it.message ?: "unknown error"}")
+        // The write is disk I/O on a URI the user just picked, which can be a slow
+        // volume; it does not belong on the main thread.
+        viewModelScope.launch {
+            val result = withContext(Dispatchers.IO) {
+                runCatching {
+                    container.appContext.contentResolver.openOutputStream(uri)
+                        ?.use { it.write(pending.second) }
+                        ?: error("could not open the chosen file")
+                }
+            }
+            result.onSuccess {
+                showMessage("Saved ${pending.first}")
+            }.onFailure {
+                showMessage("Save failed: ${it.message ?: "unknown error"}")
+            }
         }
     }
 
@@ -2554,23 +2590,26 @@ fun saveVeniceImage(context: android.content.Context) {
      * is immediately steerable rather than a dead read-only dump.
      */
     fun readCardFile(uri: Uri) {
-        val bytes = runCatching {
-            container.appContext.contentResolver.openInputStream(uri)?.use { it.readBytes() }
-        }.getOrNull()
-        if (bytes == null) {
-            showMessage("Could not read that file")
-            return
-        }
-        when (val result = CharacterCard.read(bytes)) {
-            is CharacterCard.ReadResult.Failure -> showMessage(result.reason)
-            is CharacterCard.ReadResult.Card2 -> {
-                val card = result.card
-                lab.value = lab.value.copy(
-                    brief = briefFromCard(card),
-                    premise = card.description.take(400),
-                    toast = "Imported ${card.name.ifBlank { "card" }} (${result.spec.label})",
-                )
-                showMessage("Imported ${card.name.ifBlank { "card" }}")
+        // Reading the bytes and inflating/parsing the card is real work on a file
+        // that can be several megabytes. This is called straight from the file
+        // picker's result callback, so it used to run on the main thread.
+        viewModelScope.launch {
+            when (val result = withContext(Dispatchers.IO) {
+                val bytes = runCatching {
+                    container.appContext.contentResolver.openInputStream(uri)?.use { it.readBytes() }
+                }.getOrNull() ?: return@withContext CharacterCard.ReadResult.Failure("Could not read that file")
+                CharacterCard.read(bytes)
+            }) {
+                is CharacterCard.ReadResult.Failure -> showMessage(result.reason)
+                is CharacterCard.ReadResult.Card2 -> {
+                    val card = result.card
+                    lab.value = lab.value.copy(
+                        brief = briefFromCard(card),
+                        premise = card.description.take(400),
+                        toast = "Imported ${card.name.ifBlank { "card" }} (${result.spec.label})",
+                    )
+                    showMessage("Imported ${card.name.ifBlank { "card" }}")
+                }
             }
         }
     }
@@ -3172,6 +3211,25 @@ fun saveVeniceImage(context: android.content.Context) {
         val brief = lab.value.brief ?: return ""
         fun part(key: String): String =
             brief.allParts().firstOrNull { it.key == key }?.value.orEmpty().trim()
+
+        /**
+         * Reads a part by the key Generator actually writes.
+         *
+         * These fallbacks used "a"- and "b"-prefixed keys ("arole", "atrait",
+         * "awant", "afear", "aflaw", "asecret", "bname", "brole", "btrait") plus
+         * "atmosphere"/"wthr"/"reveals"/"opener". No generator path has ever
+         * produced any of them, so every one returned blank and the exported card
+         * silently lost its personality, tone, stakes, flaws, secret and
+         * greeting. The legacy spelling is kept as a last-resort fallback for
+         * briefs saved before the keys were aligned.
+         */
+        fun partAny(vararg keys: String): String {
+            for (key in keys) {
+                val value = part(key)
+                if (value.isNotBlank()) return value
+            }
+            return ""
+        }
         fun slotText(key: String): String = brief.slot(key)
             ?.parts?.firstOrNull { it.value.isNotBlank() }?.value.orEmpty().trim()
 
@@ -3180,14 +3238,14 @@ fun saveVeniceImage(context: android.content.Context) {
 
         return when (fieldKey) {
             CardFields.NAME, "name" -> brief.title
-            "character_name" -> part("aname").ifBlank { brief.title }
+            "character_name" -> partAny("name", "aname").ifBlank { brief.title }
             "mode" -> "ROLEPLAY"
             CardFields.DESCRIPTION -> slotText("cast").ifBlank { briefTeaser(brief) }
             CardFields.PERSONALITY, "personality" -> {
-                val role = part("arole")
-                val trait = part("atrait")
-                val want = part("awant")
-                val fear = part("afear")
+                val role = partAny("role", "arole")
+                val trait = partAny("trait", "atrait")
+                val want = partAny("want", "awant")
+                val fear = partAny("fear", "afear")
                 listOf(role, trait, if (want.isNotBlank()) "Wants: $want" else "", if (fear.isNotBlank()) "Fears: $fear" else "")
                     .filter { it.isNotBlank() }
                     .joinToString(", ")
@@ -3196,33 +3254,33 @@ fun saveVeniceImage(context: android.content.Context) {
             "backstory" -> slotText("setting").ifBlank { brief.premise }
             "appearance" -> {
                 val texture = part("texture")
-                val air = part("atmosphere")
+                val air = partAny("air", "atmosphere")
                 listOf(texture, air).filter { it.isNotBlank() }.joinToString(". ")
             }
             "clothing" -> part("texture")
-            "storyTone" -> part("atmosphere").ifBlank { Dials.EXPLICITNESS[brief.dials.explicitness.coerceIn(0, 2)] }
+            "storyTone" -> partAny("air", "atmosphere").ifBlank { Dials.EXPLICITNESS[brief.dials.explicitness.coerceIn(0, 2)] }
             "relationship" -> part("power").ifBlank { Dials.POWER[brief.dials.power.coerceIn(0, 2)] }
             "worldAtmosphere" -> listOf("place", "time", "wthr", "atmosphere")
                 .mapNotNull { k -> brief.allParts().firstOrNull { it.key == k }?.value?.takeIf { it.isNotBlank() } }
                 .joinToString(" · ")
             "keyLocations" -> part("place")
             "scenarioConflict" -> part("tension").ifBlank { part("beat2") }
-            "scenarioStakes" -> part("reveals").ifBlank { part("beat1") }
+            "scenarioStakes" -> partAny("reveal", "reveals").ifBlank { part("beat1") }
             "timePeriod" -> part("time")
             "incitingIncident" -> part("framing").ifBlank { brief.premise }
-            "characterFlaws" -> part("aflaw")
-            "secretMotive" -> part("asecret")
+            "characterFlaws" -> partAny("flaw", "aflaw")
+            "secretMotive" -> partAny("secret", "asecret")
             "speechPattern" -> part("register").ifBlank { Dials.EXPLICITNESS[brief.dials.explicitness.coerceIn(0, 2)] }
-            "quirks" -> part("atrait")
+            "quirks" -> partAny("trait", "atrait")
             CardFields.SCENARIO -> slotText("setting").ifBlank { brief.premise }
-            CardFields.FIRST_MES, "greetingMessage" -> slotText("open").ifBlank { part("opener") }
+            CardFields.FIRST_MES, "greetingMessage" -> slotText("open").ifBlank { partAny("open", "opener") }
             CardFields.SYSTEM_PROMPT, "scenarioInstructions" -> {
                 listOf(brief.slot("frame")?.body, brief.slot("beats")?.body, brief.slot("twist")?.body, brief.slot("close")?.body)
                     .filterNotNull().filter { it.isNotBlank() }.joinToString("\n\n")
             }
-            "suggestedPlayerName" -> part("bname").ifBlank { "The Protagonist" }
+            "suggestedPlayerName" -> partAny("name", "bname").ifBlank { "The Protagonist" }
             "suggestedPlayerDescription" -> {
-                listOf(part("brole"), part("btrait")).filter { it.isNotBlank() }.joinToString(" · ")
+                listOf(partAny("role", "brole"), partAny("trait", "btrait")).filter { it.isNotBlank() }.joinToString(" · ")
             }
             CardFields.MES_EXAMPLE -> slotText("open")
             CardFields.CREATOR_NOTES -> briefTeaser(brief)
@@ -3343,9 +3401,6 @@ fun saveVeniceImage(context: android.content.Context) {
         }
     }
 
-    private val _currentScreen = MutableStateFlow<String>("lab")
-    val currentScreen: StateFlow<String> = _currentScreen.asStateFlow()
-
     /** Kept for the old "fetch then inspect" path; now drives schema import. */
     fun loadPlatformFields(url: String) {
         _fetchBusy.value = true
@@ -3374,14 +3429,6 @@ fun saveVeniceImage(context: android.content.Context) {
             clipboard?.setPrimaryClip(android.content.ClipData.newPlainText("card JSON", payload))
         }
         showMessage("Copied JSON")
-    }
-
-    fun navigateToPlatformHelper() {
-        _currentScreen.value = "platformHelper"
-    }
-
-    fun goBackToLab() {
-        _currentScreen.value = "lab"
     }
 
     fun dialsSummary(dials: Dials = lab.value.dials): String = dials.summary

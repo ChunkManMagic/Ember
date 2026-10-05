@@ -24,7 +24,11 @@ abstract class EmberDatabase : RoomDatabase() {
                 EmberDatabase::class.java,
                 "ember.db",
             )
-                .fallbackToDestructiveMigration()
+                // dropAllTables: true is explicit here on purpose. A schema bump
+                // destroys the library, scenarios and history either way — the
+                // flag only says whether user *preferences* (a separate store)
+                // are left alone, which they are.
+                .fallbackToDestructiveMigration(dropAllTables = true)
                 .build()
     }
 }

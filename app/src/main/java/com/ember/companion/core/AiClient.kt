@@ -208,6 +208,140 @@ internal fun buildGeminiRequestBody(
     }
 }
 
+/** One turn of a conversation. [role] is "user" or "assistant". */
+internal data class ChatTurn(val role: String, val content: String)
+
+/**
+ * Cleans a conversation history into the shape the chat APIs actually accept.
+ *
+ * Providers are strict here in ways the single-prompt path never had to care
+ * about, and each violation surfaces as an opaque HTTP 400 rather than a
+ * validation message:
+ *  - a blank/whitespace-only turn is a content error, not an empty message;
+ *  - a history may not open with an assistant turn (there is nothing for it to
+ *    be responding to), so leading assistant turns are dropped;
+ *  - two turns from the same role back to back are rejected, so consecutive
+ *    same-role turns get merged.
+ *
+ * Keeping this in one place means each provider body builder can assume a
+ * well-formed alternating history instead of re-deriving the rules.
+ */
+internal fun normalizeChatTurns(turns: List<ChatTurn>): List<ChatTurn> {
+    val cleaned = ArrayList<ChatTurn>(turns.size)
+    for (turn in turns) {
+        val content = turn.content.trim()
+        if (content.isEmpty()) continue
+        val role = if (turn.role == "assistant") "assistant" else "user"
+        val last = cleaned.lastOrNull()
+        if (last != null && last.role == role) {
+            cleaned[cleaned.lastIndex] = ChatTurn(role, last.content + "\n\n" + content)
+        } else {
+            cleaned.add(ChatTurn(role, content))
+        }
+    }
+    while (cleaned.isNotEmpty() && cleaned.first().role == "assistant") {
+        cleaned.removeAt(0)
+    }
+    return cleaned
+}
+
+/** Anthropic rejects a history whose final turn is not a user turn. */
+private fun endsOnUser(turns: List<ChatTurn>): List<ChatTurn> =
+    if (turns.isNotEmpty() && turns.last().role != "user") turns.dropLast(1) else turns
+
+internal fun buildOpenAiChatBody(
+    model: String,
+    turns: List<ChatTurn>,
+    maxTokens: Int,
+    temperature: Double,
+    sysPrompt: String,
+): JsonObject {
+    val isReasoning = isReasoningModel(model)
+    val history = normalizeChatTurns(turns)
+    return buildJsonObject {
+        put("model", model)
+        if (isReasoning) {
+            put("max_completion_tokens", maxTokens)
+        } else {
+            put("max_tokens", maxTokens)
+            put("temperature", temperature.coerceIn(0.0, 2.0))
+        }
+        putJsonArray("messages") {
+            add(buildJsonObject {
+                put("role", if (isReasoning) "developer" else "system")
+                put("content", sysPrompt)
+            })
+            history.forEach { turn ->
+                add(buildJsonObject {
+                    put("role", turn.role)
+                    put("content", turn.content)
+                })
+            }
+        }
+    }
+}
+
+internal fun buildAnthropicChatBody(
+    model: String,
+    turns: List<ChatTurn>,
+    maxTokens: Int,
+    temperature: Double,
+    sysPrompt: String,
+): JsonObject {
+    // Anthropic requires strict alternation and a user turn to respond to.
+    val history = endsOnUser(normalizeChatTurns(turns))
+    return buildJsonObject {
+        put("model", model)
+        put("max_tokens", maxTokens)
+        put("temperature", temperature.coerceIn(0.0, 1.0))
+        put("system", sysPrompt)
+        putJsonArray("messages") {
+            history.forEach { turn ->
+                add(buildJsonObject {
+                    put("role", turn.role)
+                    put("content", turn.content)
+                })
+            }
+        }
+    }
+}
+
+internal fun buildGeminiChatBody(
+    model: String,
+    turns: List<ChatTurn>,
+    maxTokens: Int,
+    temperature: Double,
+    sysPrompt: String,
+): JsonObject {
+    val history = normalizeChatTurns(turns)
+    return buildJsonObject {
+        put("model", model)
+        putJsonObject("systemInstruction") {
+            putJsonArray("parts") {
+                add(buildJsonObject { put("text", sysPrompt) })
+            }
+        }
+        putJsonArray("contents") {
+            history.forEach { turn ->
+                add(buildJsonObject {
+                    // Gemini names the assistant role "model".
+                    put("role", if (turn.role == "assistant") "model" else "user")
+                    putJsonArray("parts") {
+                        add(buildJsonObject { put("text", turn.content) })
+                    }
+                })
+            }
+        }
+        putJsonObject("generationConfig") {
+            put("maxOutputTokens", maxTokens)
+            put("temperature", temperature.coerceIn(0.0, 2.0))
+            putJsonObject("thinkingConfig") {
+                put("thinkingBudget", 0)
+            }
+        }
+    }
+}
+
 class AiClient(private val settings: SettingsStore) {
 
     private val json = Json { ignoreUnknownKeys = true }
@@ -219,26 +353,25 @@ class AiClient(private val settings: SettingsStore) {
 
     private val jsonMedia = "application/json; charset=utf-8".toMediaType()
 
-    suspend fun complete(
-        userPrompt: String,
-        context: String = "",
-        maxTokens: Int = 800,
-        temperature: Double? = null,
-        systemPromptOverride: String? = null,
-    ): AiResult = withContext(Dispatchers.IO) {
+    /** Resolved provider config, or a Failure explaining what is missing. */
+    private sealed interface Config {
+        data class Ready(val base: String, val model: String, val key: String) : Config
+        data class Invalid(val message: String) : Config
+    }
+
+    private fun resolveConfig(): Config {
         if (!settings.aiEnabled.value) {
-            return@withContext AiResult.Failure("AI assist is switched off.")
+            return Config.Invalid("AI assist is switched off.")
         }
         val key = settings.apiKeyOrNull()
         if (key.isNullOrBlank()) {
-            return@withContext AiResult.Failure("No API key saved. Add one in Settings.")
+            return Config.Invalid("No API key saved. Add one in Settings.")
         }
         val base = settings.aiBaseUrl.value.trim().trimEnd('/')
         val rawModel = settings.aiModel.value.trim()
         if (base.isBlank() || rawModel.isBlank()) {
-            return@withContext AiResult.Failure("Set a base URL and model in Settings first.")
+            return Config.Invalid("Set a base URL and model in Settings first.")
         }
-
         val model = if (settings.aiProvider.value == AiProvider.ANTHROPIC &&
             (rawModel == "claude-sonnet-5" || rawModel == "claude-sonnet")
         ) {
@@ -246,6 +379,47 @@ class AiClient(private val settings: SettingsStore) {
         } else {
             rawModel
         }
+        return Config.Ready(base, model, key)
+    }
+
+    /** Wraps a provider call so every path gets the same logging and throw-to-Failure handling. */
+    private suspend fun dispatch(
+        config: Config.Ready,
+        maxTokens: Int,
+        temperature: Double,
+        sysPrompt: String,
+        inboundChars: Int,
+        call: (base: String, model: String, key: String) -> AiResult,
+    ): AiResult = try {
+        val result = call(config.base, config.model, config.key)
+        when (result) {
+            is AiResult.Ok -> Diag.log(
+                "AI ok host=${hostOf(config.base)} model=${config.model} in=${inboundChars}c out=${result.text.length}c",
+            )
+            is AiResult.Failure -> Diag.log(
+                "AI fail host=${hostOf(config.base)} model=${config.model} :: ${result.message}",
+            )
+        }
+        result
+    } catch (t: Throwable) {
+        // Deliberately drops the URL: Gemini carries the key as a query parameter,
+        // so any echoed URL would leak the secret into the log. The host and the
+        // exception message are enough to tell a dead endpoint from a dead network.
+        val detail = redact(t.message ?: "no detail", config.key)
+        Diag.log("AI throw host=${hostOf(config.base)} ${t.javaClass.simpleName}: $detail")
+        AiResult.Failure("Request failed: ${t.javaClass.simpleName} — $detail")
+    }
+
+    suspend fun complete(
+        userPrompt: String,
+        context: String = "",
+        maxTokens: Int = 800,
+        temperature: Double? = null,
+        systemPromptOverride: String? = null,
+    ): AiResult = withContext(Dispatchers.IO) {
+        val config = resolveConfig()
+        if (config is Config.Invalid) return@withContext AiResult.Failure(config.message)
+        config as Config.Ready
 
         val effectivePrompt = systemPromptOverride ?: buildSystemPrompt(maxTokens)
         val effectiveTemp = temperature ?: settings.aiTemperature.value.toDouble()
@@ -256,26 +430,84 @@ class AiClient(private val settings: SettingsStore) {
             "Existing scenario draft for context:\n\"\"\"\n$context\n\"\"\"\n\nRequest: $userPrompt"
         }
 
-        try {
-            val result = when (settings.aiProvider.value) {
+        dispatch(config, maxTokens, effectiveTemp, effectivePrompt, composed.length) { base, model, key ->
+            when (settings.aiProvider.value) {
                 AiProvider.OPENAI -> callOpenAi(base, model, key, composed, maxTokens, effectiveTemp, effectivePrompt)
                 AiProvider.ANTHROPIC -> callAnthropic(base, model, key, composed, maxTokens, effectiveTemp, effectivePrompt)
                 AiProvider.GEMINI -> callGemini(base, model, key, composed, maxTokens, effectiveTemp, effectivePrompt)
             }
-            when (result) {
-                is AiResult.Ok -> Diag.log(
-                    "AI ok host=${hostOf(base)} model=$model in=${composed.length}c out=${result.text.length}c",
-                )
-                is AiResult.Failure -> Diag.log("AI fail host=${hostOf(base)} model=$model :: ${result.message}")
+        }
+    }
+
+    /**
+     * Multi-turn conversation. [turns] is the full history oldest-first and must
+     * end with the user's new message; the returned text is the next assistant
+     * reply. Sending the whole history is what lets the model actually
+     * remember what was said — replaying only the latest message produces a
+     * reply that contradicts the conversation it is supposedly in.
+     */
+    internal suspend fun chat(
+        turns: List<ChatTurn>,
+        systemPrompt: String,
+        maxTokens: Int = 600,
+        temperature: Double? = null,
+    ): AiResult = withContext(Dispatchers.IO) {
+        val history = normalizeChatTurns(turns)
+        if (history.isEmpty() || history.last().role != "user") {
+            return@withContext AiResult.Failure("A chat turn needs at least one user message to respond to.")
+        }
+        val config = resolveConfig()
+        if (config is Config.Invalid) return@withContext AiResult.Failure(config.message)
+        config as Config.Ready
+
+        val temp = temperature ?: settings.aiTemperature.value.toDouble()
+        val inboundChars = history.sumOf { it.content.length }
+
+        dispatch(config, maxTokens, temp, systemPrompt, inboundChars) { base, model, key ->
+            when (settings.aiProvider.value) {
+                AiProvider.OPENAI -> {
+                    val body = buildOpenAiChatBody(model, history, maxTokens, temp, systemPrompt)
+                    val request = buildRequest("$base/chat/completions", body, mapOf("Authorization" to "Bearer $key"))
+                    execute(request) { root ->
+                        val choices = root["choices"]?.jsonArray ?: return@execute null
+                        val message = choices.firstOrNull()?.jsonObject?.get("message")?.jsonObject
+                            ?: return@execute null
+                        message.str("content")
+                            ?: message.str("reasoning_content")
+                            ?: message.str("refusal")
+                    }
+                }
+                AiProvider.ANTHROPIC -> {
+                    val body = buildAnthropicChatBody(model, history, maxTokens, temp, systemPrompt)
+                    val request = buildRequest("$base/messages", body, mapOf(
+                        "x-api-key" to key,
+                        "anthropic-version" to "2023-06-01",
+                    ))
+                    execute(request) { root ->
+                        val blocks = root["content"]?.jsonArray ?: return@execute null
+                        blocks.mapNotNull { block ->
+                            val obj = block.jsonObject
+                            if (obj.str("type") == "text" || obj.str("type") == null) obj.str("text") else null
+                        }.joinToString("\n").trim().takeIf { it.isNotEmpty() }
+                    }
+                }
+                AiProvider.GEMINI -> {
+                    val body = buildGeminiChatBody(model, history, maxTokens, temp, systemPrompt)
+                    val url = "$base/models/$model:generateContent?key=$key"
+                    val request = buildRequest(url, body, emptyMap())
+                    execute(request) { root ->
+                        val candidates = root["candidates"]?.jsonArray ?: return@execute null
+                        val first = candidates.firstOrNull()?.jsonObject
+                        val parts = first?.get("content")?.jsonObject?.get("parts")?.jsonArray
+                            ?: return@execute null
+                        parts.mapNotNull { part ->
+                            val obj = part.jsonObject
+                            if (obj.str("thought") == "true") return@mapNotNull null
+                            obj.str("text")
+                        }.joinToString("").trim().takeIf { it.isNotEmpty() }
+                    }
+                }
             }
-            result
-        } catch (t: Throwable) {
-            // Deliberately drops the URL: Gemini carries the key as a query parameter,
-            // so any echoed URL would leak the secret into the log. The host and the
-            // exception message are enough to tell a dead endpoint from a dead network.
-            val detail = redact(t.message ?: "no detail", key)
-            Diag.log("AI throw host=${hostOf(base)} ${t.javaClass.simpleName}: $detail")
-            AiResult.Failure("Request failed: ${t.javaClass.simpleName} — $detail")
         }
     }
 

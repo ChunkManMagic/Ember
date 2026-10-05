@@ -1,5 +1,7 @@
 package com.ember.companion.data
 
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import org.jsoup.Jsoup
@@ -35,13 +37,18 @@ object PlatformFieldFetcher {
     suspend fun fetchFields(url: String): List<FormField> {
         val normalised = normaliseUrl(url)
         val request = Request.Builder().url(normalised).get().build()
-        return client.newCall(request).execute().use { response ->
-            if (!response.isSuccessful) {
-                throw IllegalStateException("${response.code} from $normalised")
+        // The blocking call and the Jsoup parse both belong off the main thread.
+        // Callers reach this from viewModelScope (Main), so without the switch the
+        // whole 20-second read timeout ran on the UI thread.
+        return withContext(Dispatchers.IO) {
+            client.newCall(request).execute().use { response ->
+                if (!response.isSuccessful) {
+                    throw IllegalStateException("${response.code} from $normalised")
+                }
+                val body = response.body?.string()
+                    ?: throw IllegalStateException("Empty response from $normalised")
+                parseFormFields(body)
             }
-            val body = response.body?.string()
-                ?: throw IllegalStateException("Empty response from $normalised")
-            parseFormFields(body)
         }
     }
 

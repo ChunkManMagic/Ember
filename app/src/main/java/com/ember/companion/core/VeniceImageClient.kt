@@ -62,45 +62,60 @@ class VeniceImageClient(
 
         try {
             httpClient.newCall(request).execute().use { response ->
-                val bodyStr = response.body?.string() ?: ""
+                // Read the body exactly once, as bytes. The previous version read
+                // it as a String and then tried to read it again as bytes in the
+                // catch block, which always threw because the body was already
+                // consumed and closed — so the raw-image fallback never ran and a
+                // binary response surfaced as a confusing exception instead of a
+                // decoded bitmap.
+                val bytes = response.body?.bytes()
+                    ?: return@withContext Result.failure(Exception("Venice returned an empty body."))
+                val bodyStr = String(bytes, Charsets.UTF_8)
+
                 if (!response.isSuccessful) {
-                    return@withContext Result.failure(Exception("HTTP ${response.code}: $bodyStr"))
+                    return@withContext Result.failure(Exception("HTTP ${response.code}: ${bodyStr.take(300)}"))
                 }
 
-                // If it's pure binary image (some APIs do this if format is webp and not b64 json)
-                // But OpenAI compatible usually returns {"data": [{"b64_json": "..."}]}
-                // Let's try parsing as JSON first
-                try {
-                    val json = Json { ignoreUnknownKeys = true }
-                    val element = json.parseToJsonElement(bodyStr)
-                    var b64: String? = null
-                    
-                    if (element is JsonObject) {
-                        if (element.containsKey("images")) {
-                            b64 = element["images"]?.jsonArray?.get(0)?.jsonPrimitive?.content
-                        } else if (element.containsKey("data")) {
-                            b64 = element["data"]?.jsonArray?.get(0)?.jsonObject?.get("b64_json")?.jsonPrimitive?.content
+                fun decode(candidate: ByteArray): Bitmap? =
+                    if (candidate.isEmpty()) null
+                    else BitmapFactory.decodeByteArray(candidate, 0, candidate.size)
+
+                // Venice normally answers with base64 JSON, in either {"images":[...]}
+                // or the OpenAI-compatible {"data":[{"b64_json":"..."}]}.
+                var parsedJson = false
+                runCatching { Json { ignoreUnknownKeys = true }.parseToJsonElement(bodyStr) }
+                    .getOrNull()
+                    ?.let { element ->
+                        if (element is JsonObject) {
+                            parsedJson = true
+                            // firstOrNull, not get(0): a filtered response arrives as
+                            // {"data":[]} and indexing it threw instead of reporting
+                            // the filter result the user actually needs to see.
+                            val b64 = if (element.containsKey("images")) {
+                                element["images"]?.jsonArray?.firstOrNull()?.jsonPrimitive?.content
+                            } else {
+                                element["data"]?.jsonArray?.firstOrNull()
+                                    ?.jsonObject?.get("b64_json")?.jsonPrimitive?.content
+                            }
+                            if (!b64.isNullOrBlank()) {
+                                decode(Base64.decode(b64, Base64.DEFAULT))?.let {
+                                    return@withContext Result.success(it)
+                                }
+                            }
                         }
                     }
-                    
-                    if (b64 != null) {
-                        val decodedString = Base64.decode(b64, Base64.DEFAULT)
-                        val bitmap = BitmapFactory.decodeByteArray(decodedString, 0, decodedString.size)
-                        if (bitmap != null) {
-                            return@withContext Result.success(bitmap)
-                        }
-                    }
-                } catch (e: Exception) {
-                    // It might be raw binary data (e.g. if return_binary=true was implicit)
-                    val bytes = response.body?.bytes()
-                    if (bytes != null) {
-                        val bitmap = BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
-                        if (bitmap != null) {
-                            return@withContext Result.success(bitmap)
-                        }
-                    }
+
+                // Not JSON, or JSON without an image: the bytes may be the image
+                // itself (which is what happens if the provider honours binary
+                // despite return_binary=false).
+                decode(bytes)?.let { return@withContext Result.success(it) }
+
+                val reason = if (parsedJson) {
+                    "Venice returned no image data."
+                } else {
+                    "Could not parse image from response: ${bodyStr.take(100)}"
                 }
-                return@withContext Result.failure(Exception("Could not parse image from response: ${bodyStr.take(100)}"))
+                Result.failure(Exception(reason))
             }
         } catch (e: Exception) {
             Result.failure(e)

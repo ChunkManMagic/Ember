@@ -257,7 +257,16 @@ fun DiscoverScreen(vm: EmberViewModel, contentPadding: PaddingValues) {
                                             IconButton(
                                                 onClick = {
                                                     val clip = context.getSystemService(Context.CLIPBOARD_SERVICE) as? android.content.ClipboardManager
-                                                    val text = clip?.primaryClip?.getItemAt(0)?.text?.toString()
+                                                    // getItemAt(0) throws when the clip is
+                                                    // present but carries only a MIME
+                                                    // description (itemCount == 0), which is
+                                                    // a legal non-null primaryClip. Tapping
+                                                    // paste used to crash the app there.
+                                                    val text = clip?.primaryClip
+                                                        ?.takeIf { it.itemCount > 0 }
+                                                        ?.getItemAt(0)
+                                                        ?.text
+                                                        ?.toString()
                                                     if (!text.isNullOrBlank()) {
                                                         urlDraft = text.trim()
                                                     }
@@ -1223,7 +1232,9 @@ private fun createWebView(
     webView.settings.apply {
         javaScriptEnabled = true
         domStorageEnabled = true
-        databaseEnabled = true
+        // databaseEnabled used to be set here for WebSQL. WebView dropped the
+        // WebSQL API entirely, so the flag does nothing on any current engine —
+        // it is gone rather than left behind.
         loadWithOverviewMode = true
         useWideViewPort = true
         setSupportZoom(true)

@@ -43,7 +43,7 @@ import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.FavoriteBorder
 import androidx.compose.material.icons.filled.GridView
 import androidx.compose.material.icons.filled.Image
-import androidx.compose.material.icons.filled.InsertDriveFile
+import androidx.compose.material.icons.automirrored.filled.InsertDriveFile
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Videocam
@@ -620,7 +620,7 @@ private fun EmptyState(hasAny: Boolean, importing: Boolean) {
             modifier = Modifier.padding(32.dp),
         ) {
             Icon(
-                if (hasAny) Icons.AutoMirrored.Filled.Sort else Icons.Filled.InsertDriveFile,
+                if (hasAny) Icons.AutoMirrored.Filled.Sort else Icons.AutoMirrored.Filled.InsertDriveFile,
                 null,
                 Modifier.size(38.dp),
                 tint = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -880,7 +880,7 @@ private fun iconFor(kind: String): ImageVector = when (kind) {
     MediaItem.KIND_IMAGE -> Icons.Filled.Image
     MediaItem.KIND_AUDIO -> Icons.Filled.AudioFile
     MediaItem.KIND_TEXT -> Icons.Filled.Description
-    else -> Icons.Filled.InsertDriveFile
+    else -> Icons.AutoMirrored.Filled.InsertDriveFile
 }
 
 private fun formatDuration(ms: Long): String {

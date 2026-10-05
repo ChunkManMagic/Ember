@@ -183,11 +183,30 @@ object PersonaForgeExport {
         fun part(key: String): String =
             brief.allParts().firstOrNull { it.key == key }?.value.orEmpty().trim()
 
+        /**
+         * Reads a part by its canonical key.
+         *
+         * Keys come from Generator's Part(...) calls, which are "air",
+         * "weather", "reveal" and "open". This export used to ask for
+         * "atmosphere", "wthr", "reveals" and "opener" — none of which any
+         * generator path has ever produced — so every one of those lookups
+         * returned blank and the exported card silently dropped the atmosphere,
+         * weather and stakes fields. The alias is kept as a second chance for
+         * scenarios saved before the keys were aligned.
+         */
+        fun slot(aliases: String, vararg keys: String): String {
+            for (key in keys) {
+                val value = part(key)
+                if (value.isNotBlank()) return value
+            }
+            return part(aliases)
+        }
+
         fun draft(key: String): String = drafts?.get(key)?.trim().orEmpty()
 
         val charName = draft("character_name").ifBlank {
             part("character_name").ifBlank {
-                part("aname").ifBlank { card?.name.orEmpty().ifBlank { brief.title } }
+                part("name").ifBlank { card?.name.orEmpty().ifBlank { brief.title } }
             }
         }
 
@@ -228,7 +247,7 @@ object PersonaForgeExport {
         val appearance = draft("appearance").ifBlank {
             part("appearance").ifBlank {
                 val texture = part("texture")
-                val air = part("atmosphere")
+                val air = slot("atmosphere", "air")
                 listOf(texture, air).filter { it.isNotBlank() }.joinToString(". ")
                     .ifBlank { card?.description.orEmpty() }
             }
@@ -237,7 +256,7 @@ object PersonaForgeExport {
         val clothing = draft("clothing").ifBlank { part("clothing").ifBlank { part("texture") } }
         val storyTone = draft("storyTone").ifBlank {
             part("storyTone").ifBlank {
-                part("atmosphere").ifBlank { Dials.EXPLICITNESS[brief.dials.explicitness.coerceIn(0, 2)] }
+                slot("atmosphere", "air").ifBlank { Dials.EXPLICITNESS[brief.dials.explicitness.coerceIn(0, 2)] }
             }
         }
         val relationship = draft("relationship").ifBlank {
@@ -248,19 +267,19 @@ object PersonaForgeExport {
 
         val worldAtmosphere = draft("worldAtmosphere").ifBlank {
             part("worldAtmosphere").ifBlank {
-                listOf(part("place"), part("time"), part("wthr"), part("atmosphere"))
+                listOf(part("place"), part("time"), slot("wthr", "weather"), slot("atmosphere", "air"))
                     .filter { it.isNotBlank() }
                     .joinToString(" · ")
             }
         }
         val keyLocations = draft("keyLocations").ifBlank { part("keyLocations").ifBlank { part("place") } }
         val conflict = draft("scenarioConflict").ifBlank { part("scenarioConflict").ifBlank { part("tension").ifBlank { part("beat2") } } }
-        val stakes = draft("scenarioStakes").ifBlank { part("scenarioStakes").ifBlank { part("reveals").ifBlank { part("beat1") } } }
+        val stakes = draft("scenarioStakes").ifBlank { part("scenarioStakes").ifBlank { slot("reveals", "reveal").ifBlank { part("beat1") } } }
         val timePeriod = draft("timePeriod").ifBlank { part("timePeriod").ifBlank { part("time") } }
         val inciting = draft("incitingIncident").ifBlank { part("incitingIncident").ifBlank { part("framing").ifBlank { brief.premise } } }
 
-        val flaws = draft("characterFlaws").ifBlank { part("characterFlaws").ifBlank { part("aflaw") } }
-        val secret = draft("secretMotive").ifBlank { part("secretMotive").ifBlank { part("asecret") } }
+        val flaws = draft("characterFlaws").ifBlank { part("characterFlaws").ifBlank { slot("aflaw", "flaw") } }
+        val secret = draft("secretMotive").ifBlank { part("secretMotive").ifBlank { slot("asecret", "secret") } }
         val speech = draft("speechPattern").ifBlank {
             part("speechPattern").ifBlank {
                 part("register").ifBlank { Dials.EXPLICITNESS[brief.dials.explicitness.coerceIn(0, 2)] }
@@ -273,7 +292,7 @@ object PersonaForgeExport {
                 card?.firstMessage?.ifBlank { null }
                     ?: brief.slot("dynamic")?.parts?.firstOrNull { it.key == "greetingMessage" }?.value
                     ?: brief.slot("open")?.body.orEmpty()
-                    .ifBlank { part("opener") }
+                    .ifBlank { slot("opener", "open") }
             }
         }
 
