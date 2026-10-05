@@ -3869,8 +3869,8 @@ fun saveVeniceImage(context: android.content.Context) {
      * own memory would mean reporting "queued" forever and never noticing a
      * failure the user needed to know about.
      */
-    fun refreshDownloads(context: Context) {
-        val dm = context.getSystemService(Context.DOWNLOAD_SERVICE) as? DownloadManager ?: return
+    fun refreshDownloads() {
+        val dm = container.appContext.getSystemService(Context.DOWNLOAD_SERVICE) as? DownloadManager ?: return
         val current = _downloads.value
         if (current.isEmpty()) return
         _downloads.value = current.map { entry -> readDownloadState(dm, entry) }
@@ -3880,6 +3880,14 @@ fun saveVeniceImage(context: android.content.Context) {
         // In-app downloads have no DownloadManager row; their state arrives via
         // push, so asking the system about them would only invent failures.
         if (entry.managedInApp) return entry
+        // Rows the system never issued a row for. Placeholder, webpage-rejected and
+        // never-started entries all use -System.nanoTime() as a synthetic id, and
+        // querying that finds nothing — which used to overwrite their real reason
+        // ("Link is a webpage, not a media file", "could not start") with "The
+        // system lost track of this download" as soon as any poll ran. Every id
+        // DownloadManager hands out is positive, so a non-positive id is the
+        // reliable signal here and covers every current and future creator.
+        if (entry.id <= 0L) return entry
         val query = android.app.DownloadManager.Query().setFilterById(entry.id)
         return runCatching {
             dm.query(query)?.use { cursor ->
@@ -3929,12 +3937,17 @@ fun saveVeniceImage(context: android.content.Context) {
         else -> "The download failed"
     }
 
-    private fun startDownloadPolling(context: Context) {
+    private fun startDownloadPolling() {
         if (downloadPollJob?.isActive == true) return
         downloadPollJob = viewModelScope.launch {
+            // container.appContext, not the caller's Context: the caller is an
+            // Activity (Discover's download listener), and this job lives as long
+            // as the ViewModel, so capturing the Activity leaked it for the whole
+            // download. DownloadManager is an app-wide service, so the application
+            // context is all it needs.
             while (true) {
                 kotlinx.coroutines.delay(900)
-                refreshDownloads(context)
+                refreshDownloads()
                 val stillRunning = _downloads.value.any {
                     it.isActive()
                 }
@@ -3944,7 +3957,7 @@ fun saveVeniceImage(context: android.content.Context) {
     }
 
     /** Records a failure that never reached the system download manager. */
-    private fun trackImmediate(context: Context, url: String, fileName: String, failed: Boolean) {
+    private fun trackImmediate(url: String, fileName: String, failed: Boolean) {
         _downloads.value = _downloads.value + DownloadEntry(
             id = -System.nanoTime(),
             fileName = fileName,
@@ -3952,6 +3965,7 @@ fun saveVeniceImage(context: android.content.Context) {
             mimeType = "",
             state = if (failed) DownloadState.FAILED else DownloadState.QUEUED,
             reason = if (failed) "Could not start" else "",
+            managedInApp = true,
         )
     }
 
