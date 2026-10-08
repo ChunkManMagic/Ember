@@ -9,22 +9,20 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.layout.safeDrawing
-import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.Chat
 import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.FilterChip
@@ -48,27 +46,14 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.ember.companion.core.AiClient
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.ember.companion.core.AiResult
 import com.ember.companion.core.ChatTurn
-import com.ember.companion.core.SettingsStore
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
-
-/** One bubble in the conversation. */
-private data class ChatMessage(
-    val id: Long,
-    val fromUser: Boolean,
-    val text: String,
-    /** True while the model is still writing this reply. */
-    val pending: Boolean = false,
-    /** True when this bubble reports a failure rather than conversation. */
-    val isError: Boolean = false,
-)
 
 /**
  * Persona presets. Each is a system prompt describing a conversation partner;
@@ -94,7 +79,10 @@ private val PERSONA_PRESETS = listOf(
 private const val MAX_HISTORY_TURNS = 40
 
 @Composable
-fun ChatScreen(onBack: () -> Unit = {}) {
+fun ChatScreen(
+    vm: EmberViewModel,
+    contentPadding: PaddingValues = PaddingValues(0.dp),
+) {
     // The clock needs a state source to recompose against. derivedStateOf around
     // System.currentTimeMillis() would read the same value forever, because the
     // clock is not observable Compose state.
@@ -113,20 +101,39 @@ fun ChatScreen(onBack: () -> Unit = {}) {
         String.format("%02d:%02d", elapsedSeconds / 60, elapsedSeconds % 60)
     }
 
-    var messages by remember { mutableStateOf(listOf<ChatMessage>()) }
     var input by remember { mutableStateOf("") }
     var personaIndex by remember { mutableStateOf(0) }
     var customPersona by remember { mutableStateOf("") }
     var awaitingReply by remember { mutableStateOf(false) }
 
+    val thread by vm.chatThread.collectAsStateWithLifecycle()
+    val messages by vm.chatMessages.collectAsStateWithLifecycle()
+    val aiHasKey by vm.aiHasKey.collectAsStateWithLifecycle()
+
+    // Resume the persisted transcript once, when the overlay opens.
+    LaunchedEffect(Unit) { vm.loadChatThread() }
+
+    // A stored thread remembers the persona it was created under; only apply that
+    // once the value has actually loaded, or it would overwrite the user's
+    // current selection with the default on every open.
+    var personaRestored by remember { mutableStateOf(false) }
+    LaunchedEffect(thread?.id, thread?.persona) {
+        val restored = thread
+        if (!personaRestored && restored != null) {
+            personaRestored = true
+            if (restored.customPersona) {
+                customPersona = restored.persona
+            } else {
+                val index = PERSONA_PRESETS.indexOfFirst { it.first == restored.persona }
+                if (index >= 0) personaIndex = index
+            }
+        }
+    }
+
     val personaPrompt = customPersona.ifBlank { PERSONA_PRESETS[personaIndex].second }
     val personaLabel = if (customPersona.isBlank()) PERSONA_PRESETS[personaIndex].first else "Custom"
 
-    val context = LocalContext.current
     val scope = rememberCoroutineScope()
-    // Built once: SettingsStore reads from disk-backed state, so rebuilding it
-    // per keystroke would re-read preferences for nothing.
-    val aiClient = remember(context) { AiClient(SettingsStore(context)) }
 
     val listState = rememberLazyListState()
     // Follow the conversation as it grows, including the reply that arrives
@@ -141,27 +148,20 @@ fun ChatScreen(onBack: () -> Unit = {}) {
         if (text.isEmpty() || awaitingReply) return
         input = ""
         val history = messages
-            .filterNot { it.pending || it.isError }
+            .filterNot { it.isError }
             .takeLast(MAX_HISTORY_TURNS)
             .map { ChatTurn(if (it.fromUser) "user" else "assistant", it.text) } +
             ChatTurn("user", text)
-        messages = messages + ChatMessage(System.currentTimeMillis(), fromUser = true, text = text)
+        vm.appendChatMessage(fromUser = true, text = text)
+        vm.updateChatPersona(personaLabel, customPersona.isNotBlank())
         awaitingReply = true
         scope.launch {
-            val result = aiClient.chat(
-                turns = history,
-                systemPrompt = buildChatSystemPrompt(personaPrompt),
-                maxTokens = 600,
-            )
+            val result = vm.chatReply(history, buildChatSystemPrompt(personaPrompt))
             awaitingReply = false
-            messages = messages + when (result) {
-                is AiResult.Ok -> ChatMessage(System.currentTimeMillis(), fromUser = false, text = result.text.trim())
-                is AiResult.Failure -> ChatMessage(
-                    System.currentTimeMillis(),
-                    fromUser = false,
-                    text = result.message,
-                    isError = true,
-                )
+            when (result) {
+                is AiResult.Ok -> vm.appendChatMessage(fromUser = false, text = result.text.trim())
+                is AiResult.Failure ->
+                    vm.appendChatMessage(fromUser = false, text = result.message, isError = true)
             }
         }
     }
@@ -170,14 +170,24 @@ fun ChatScreen(onBack: () -> Unit = {}) {
         modifier = Modifier
             .fillMaxSize()
             .background(MaterialTheme.colorScheme.background)
-            // The chat is layered over the Scaffold, so it inherits no padding
-            // from it and has to inset itself around the system bars.
-            .windowInsetsPadding(WindowInsets.safeDrawing),
+            // Chat is a tab, so the Scaffold's insets arrive as contentPadding
+            // rather than being applied here.
+            .padding(contentPadding),
     ) {
+        // Shown instead of an inert composer when there is no key yet. The old
+        // build hid the feature behind a button disabled until setup finished,
+        // which meant the screen looked broken rather than not-yet-configured.
+        if (!aiHasKey) {
+            MissingKeyNotice()
+        }
         ChatHeader(
             personaLabel = personaLabel,
             elapsedLabel = elapsedLabel,
-            onBack = onBack,
+            canStartNew = messages.isNotEmpty(),
+            onNew = {
+                vm.newChatThread()
+                personaRestored = true
+            },
         )
 
         PersonaStrip(
@@ -212,10 +222,42 @@ fun ChatScreen(onBack: () -> Unit = {}) {
 
         ChatComposer(
             value = input,
-            enabled = !awaitingReply,
+            enabled = !awaitingReply && aiHasKey,
             onValueChange = { input = it },
             onSend = ::send,
         )
+    }
+}
+
+/**
+ * Stands in for the composer until a key is configured.
+ *
+ * Deliberately does not jump to Settings: the screen explains the one thing
+ * needed, and the tab stays usable so the rest of the app is unaffected.
+ */
+@Composable
+private fun MissingKeyNotice() {
+    Surface(
+        color = MaterialTheme.colorScheme.surfaceVariant,
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(16.dp),
+    ) {
+        Column(
+            modifier = Modifier.padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+            Text(
+                "No API key yet",
+                style = MaterialTheme.typography.titleSmall,
+            )
+            Text(
+                "Chat uses the same OpenAI-compatible provider as the Lab. Open Settings, " +
+                    "choose a provider and paste a key, then come back here.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
     }
 }
 
@@ -242,7 +284,12 @@ private fun buildChatSystemPrompt(persona: String): String = """
 """.trimIndent()
 
 @Composable
-private fun ChatHeader(personaLabel: String, elapsedLabel: String, onBack: () -> Unit) {
+private fun ChatHeader(
+    personaLabel: String,
+    elapsedLabel: String,
+    canStartNew: Boolean,
+    onNew: () -> Unit,
+) {
     Surface(
         color = MaterialTheme.colorScheme.surfaceVariant,
         tonalElevation = 2.dp,
@@ -254,9 +301,6 @@ private fun ChatHeader(personaLabel: String, elapsedLabel: String, onBack: () ->
                 .padding(horizontal = 4.dp, vertical = 10.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            IconButton(onClick = onBack) {
-                Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
-            }
             Box(
                 modifier = Modifier
                     .size(42.dp)
@@ -298,6 +342,13 @@ private fun ChatHeader(personaLabel: String, elapsedLabel: String, onBack: () ->
                 )
             }
             Spacer(Modifier.width(4.dp))
+            // Starts a clean thread. Only offered once there is a transcript to
+            // lose, so it cannot wipe an empty conversation.
+            if (canStartNew) {
+                IconButton(onClick = onNew) {
+                    Icon(Icons.AutoMirrored.Filled.Chat, contentDescription = "New conversation")
+                }
+            }
         }
     }
 }
@@ -367,7 +418,7 @@ private fun PersonaStrip(
 }
 
 @Composable
-private fun MessageBubble(message: ChatMessage) {
+private fun MessageBubble(message: com.ember.companion.data.db.ChatMessageRow) {
     Row(
         modifier = Modifier.fillMaxWidth(),
         horizontalArrangement = if (message.fromUser) Arrangement.End else Arrangement.Start,

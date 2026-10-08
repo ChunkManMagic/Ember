@@ -9,6 +9,7 @@ import androidx.compose.foundation.layout.calculateStartPadding
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.Chat
 import androidx.compose.material.icons.filled.Explore
 import androidx.compose.material.icons.filled.Science
 import androidx.compose.material.icons.filled.Search
@@ -48,19 +49,12 @@ import androidx.compose.ui.unit.dp
 fun EmberRoot(vm: EmberViewModel) {
     val tab by vm.tab.collectAsStateWithLifecycle()
     val message by vm.snackMessage.collectAsStateWithLifecycle()
-    val chatOpen by vm.chatOpen.collectAsStateWithLifecycle()
     val snackHost = remember { SnackbarHostState() }
     val direction = LocalLayoutDirection.current
 
     // Back handling for tab navigation backstack
     BackHandler(enabled = vm.canNavigateBackTab()) {
         vm.navigateBackTab()
-    }
-
-    // The chat overlay owns the back gesture while it is up, otherwise back would
-    // walk the tab stack out from under it.
-    BackHandler(enabled = chatOpen) {
-        vm.closeChat()
     }
 
     // Lets the Lab share text without the view model holding a Context.
@@ -90,8 +84,10 @@ fun EmberRoot(vm: EmberViewModel) {
         vm.consumeMessage()
     }
 
-    // Chat is layered over the Scaffold rather than inside it: inside, the
-    // bottom NavigationBar is drawn last and would sit on top of the composer.
+    // Chat is a tab like any other: burying it in Settings behind a button that
+    // is disabled until an API key exists made it undiscoverable, which is not
+    // the same as "a small side feature". Tab back-stack still applies, so back
+    // from Chat returns to wherever the user came from.
     Box(Modifier.fillMaxSize()) {
         Scaffold(
             bottomBar = {
@@ -137,16 +133,11 @@ fun EmberRoot(vm: EmberViewModel) {
                         Tab.SEARCH -> SearchScreen(vm = vm, contentPadding = screenPadding)
                         Tab.LIBRARY -> LibraryScreen(vm = vm, contentPadding = screenPadding)
                         Tab.LAB -> ScenarioLabScreen(vm = vm, contentPadding = screenPadding)
+                        Tab.CHAT -> ChatScreen(vm = vm, contentPadding = screenPadding)
                         Tab.SETTINGS -> SettingsScreen(vm = vm, contentPadding = screenPadding)
                     }
                 }
             }
-        }
-
-        // Launched from Settings, so the tab underneath keeps its own state and
-        // scroll position while the chat is open.
-        if (chatOpen) {
-            ChatScreen(onBack = { vm.closeChat() })
         }
     }
 }
@@ -156,5 +147,6 @@ private fun Tab.icon(): ImageVector = when (this) {
     Tab.SEARCH -> Icons.Filled.Search
     Tab.LIBRARY -> Icons.Filled.VideoLibrary
     Tab.LAB -> Icons.Filled.Science
+    Tab.CHAT -> Icons.AutoMirrored.Filled.Chat
     Tab.SETTINGS -> Icons.Filled.Tune
 }

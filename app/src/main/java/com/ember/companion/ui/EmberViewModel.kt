@@ -56,6 +56,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
@@ -71,6 +72,7 @@ enum class Tab(val label: String) {
     SEARCH("Search"),
     LIBRARY("Library"),
     LAB("Lab"),
+    CHAT("Chat"),
     SETTINGS("Settings"),
 }
 
@@ -244,14 +246,103 @@ class EmberViewModel(private val container: AppContainer) : ViewModel() {
     fun showMessage(message: String) { snackMessage.value = message }
     fun consumeMessage() { snackMessage.value = null }
 
-    // ---- companion chat overlay ------------------------------------------
+    // ---- companion chat conversation state -----------------------------
     //
-    // Chat is presented as a full-screen overlay rather than a tab on purpose:
-    // it is a separate side feature, and adding a sixth bottom-bar item would
-    // have changed navigation that every other screen already depends on.
-    val chatOpen = MutableStateFlow(false)
-    fun openChat() { chatOpen.value = true }
-    fun closeChat() { chatOpen.value = false }
+    // Held here rather than in ChatScreen so the transcript survives the overlay
+    // being closed and reopened, and so it lives as long as the app rather than
+    // as long as one composition.
+    private var activeThreadId: Long = 0
+
+    /** The conversation currently open, or the most recent one. */
+    val chatThread: StateFlow<com.ember.companion.data.db.ChatThread?> =
+        container.chatThreadDao.observeMostRecent()
+            .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
+
+    private val _chatMessages = MutableStateFlow<List<com.ember.companion.data.db.ChatMessageRow>>(emptyList())
+    val chatMessages: StateFlow<List<com.ember.companion.data.db.ChatMessageRow>> = _chatMessages.asStateFlow()
+
+    /**
+     * Loads the newest conversation (or the given one) into memory.
+     *
+     * Loading on open rather than per-keystroke is what makes a long transcript
+     * cheap to scroll: the DB read happens once.
+     */
+    fun loadChatThread(threadId: Long? = null) {
+        viewModelScope.launch {
+            val dao = container.chatThreadDao
+            val thread = if (threadId != null) dao.getById(threadId) else chatThread.value
+            activeThreadId = thread?.id ?: 0
+            _chatMessages.value = if (activeThreadId == 0L) {
+                emptyList()
+            } else {
+                container.chatMessageDao.observeForThread(activeThreadId).first()
+            }
+        }
+    }
+
+    /** Appends a message to the active thread, creating the thread if needed. */
+    fun appendChatMessage(fromUser: Boolean, text: String, isError: Boolean = false) {
+        val body = text.trim()
+        if (body.isEmpty()) return
+        viewModelScope.launch {
+            val threadDao = container.chatThreadDao
+            var threadId = activeThreadId
+            if (threadId == 0L) {
+                threadId = threadDao.insert(
+                    com.ember.companion.data.db.ChatThread(
+                        title = body.take(60).replace('\n', ' '),
+                    ),
+                )
+                activeThreadId = threadId
+            }
+            val now = System.currentTimeMillis()
+            val row = com.ember.companion.data.db.ChatMessageRow(
+                threadId = threadId,
+                fromUser = fromUser,
+                text = body,
+                isError = isError,
+                sentAt = now,
+            )
+            container.chatMessageDao.insert(row)
+            threadDao.touch(threadId, now)
+            // The in-memory list drives the UI, so it has to be updated here
+            // rather than waiting for the DB flow to come back around.
+            _chatMessages.value = _chatMessages.value + row
+        }
+    }
+
+    /** Starts a fresh conversation, discarding the current transcript. */
+    fun newChatThread() {
+        viewModelScope.launch {
+            container.chatMessageDao.clearThread(activeThreadId)
+            container.chatThreadDao.deleteById(activeThreadId)
+            activeThreadId = 0
+            _chatMessages.value = emptyList()
+        }
+    }
+
+    /**
+     * Sends a turn and returns the reply for the caller to render.
+     *
+     * Uses the container's shared [AiClient] rather than building one per
+     * screen, so the chat inherits the same key, base URL and model as the rest
+     * of the app.
+     */
+    internal suspend fun chatReply(
+        turns: List<com.ember.companion.core.ChatTurn>,
+        systemPrompt: String,
+    ): AiResult = container.aiClient.chat(turns = turns, systemPrompt = systemPrompt, maxTokens = 600)
+
+    fun updateChatPersona(persona: String, custom: Boolean) {
+        viewModelScope.launch {
+            val threadId = activeThreadId
+            if (threadId == 0L) return@launch
+            val existing = container.chatThreadDao.getById(threadId) ?: return@launch
+            container.chatThreadDao.update(
+                existing.copy(persona = persona, customPersona = custom, updatedAt = System.currentTimeMillis()),
+            )
+        }
+    }
 
     fun refreshVpn() { _vpnState.value = container.vpnMonitor.current() }
 
@@ -747,10 +838,6 @@ class EmberViewModel(private val container: AppContainer) : ViewModel() {
      * Keyed by filename, which is what DownloadManager reports back.
      */
     private val pendingMeta = mutableMapOf<String, PageMedia>()
-
-    private fun rememberPendingMetadata(fileName: String, item: PageMedia) {
-        pendingMeta[fileName] = item
-    }
 
     /** Called after an import so a scanned item keeps its page metadata. */
     fun applyPendingMetadata(imported: List<MediaItem>) {
@@ -2484,9 +2571,6 @@ fun saveVeniceImage(context: android.content.Context) {
 
     fun cardPlatform(): CardPlatforms.Platform = CardPlatforms.byId(cardExtras.value.platformId)
 
-    fun currentFormat(): CardFormat =
-        if (cardExtras.value.useCustom) cardExtras.value.custom.format else cardPlatform().format
-
     /**
      * Encodes the card for the chosen platform and hands the bytes to the system
      * file picker. Copy-only platforms have no file to write, so this is a no-op
@@ -3118,8 +3202,6 @@ fun saveVeniceImage(context: android.content.Context) {
 
     // ---- platform helper ---------------------------------------------------
     // Field discovery from a platform's own form.
-    private val _platformFields = MutableStateFlow<List<FormField>>(emptyList())
-    val platformFields: StateFlow<List<FormField>> = _platformFields.asStateFlow()
 
     private val _fetchBusy = MutableStateFlow(false)
     val fetchBusy: StateFlow<Boolean> = _fetchBusy.asStateFlow()
@@ -3401,21 +3483,6 @@ fun saveVeniceImage(context: android.content.Context) {
         }
     }
 
-    /** Kept for the old "fetch then inspect" path; now drives schema import. */
-    fun loadPlatformFields(url: String) {
-        _fetchBusy.value = true
-        viewModelScope.launch {
-            try {
-                _platformFields.value = PlatformFieldFetcher.fetchFields(url)
-                showMessage("Fetched ${_platformFields.value.size} fields")
-            } catch (e: Exception) {
-                showMessage("Failed to fetch fields: ${e.message}")
-            } finally {
-                _fetchBusy.value = false
-            }
-        }
-    }
-
     fun clearExportPayload() {
         _exportPayload.value = null
     }
@@ -3431,9 +3498,7 @@ fun saveVeniceImage(context: android.content.Context) {
         showMessage("Copied JSON")
     }
 
-    fun dialsSummary(dials: Dials = lab.value.dials): String = dials.summary
     val activeDialsSummary: String get() = lab.value.dials.summary
-    val activeDialsShortSummary: String get() = lab.value.dials.shortSummary
 
     fun appendAiOutputToBrief() {
         val output = lab.value.aiOutput.trim()
@@ -3954,19 +4019,6 @@ fun saveVeniceImage(context: android.content.Context) {
                 if (!stillRunning) break
             }
         }
-    }
-
-    /** Records a failure that never reached the system download manager. */
-    private fun trackImmediate(url: String, fileName: String, failed: Boolean) {
-        _downloads.value = _downloads.value + DownloadEntry(
-            id = -System.nanoTime(),
-            fileName = fileName,
-            url = url,
-            mimeType = "",
-            state = if (failed) DownloadState.FAILED else DownloadState.QUEUED,
-            reason = if (failed) "Could not start" else "",
-            managedInApp = true,
-        )
     }
 
     fun clearFinishedDownloads() {

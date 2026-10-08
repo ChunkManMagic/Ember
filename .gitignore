@@ -1,18 +1,15 @@
 # Build outputs
-/build/
-/app/build/
+build/
 *.apk
+*.ap_
 *.aar
+*.dex
 
 # Gradle
 .gradle/
-.gradle/
 !gradle/wrapper/gradle-wrapper.jar
 !gradle/wrapper/gradle-wrapper.properties
-.gradle/
-build/
 *.iml
-.idea/
 
 # Local config
 local.properties
@@ -21,7 +18,6 @@ local.properties
 
 # IDE
 .idea/
-*.iml
 *.iws
 *.ipr
 *.swp
@@ -31,13 +27,7 @@ local.properties
 .DS_Store
 Thumbs.db
 
-# Build outputs
-*.apk
-*.ap_
-*.dex
-
 # Kotlin
-*.kt~
 *.kt~
 
 # Temporary
@@ -45,4 +35,6 @@ Thumbs.db
 *.temp
 *.log
 
-.kotlin/
+# NOTE: app/build/ was committed before these rules existed, so those artifacts
+# are still tracked. The ignore rules above cover everything from now on;
+# removing the already-committed copies is a history change, not a config fix.

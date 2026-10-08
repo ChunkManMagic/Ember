@@ -86,8 +86,13 @@ class SettingsStore(context: Context) {
     val searchHost: StateFlow<String> = _searchHost.asStateFlow()
 
     private val _searchPort = MutableStateFlow(
+        // Range-checked on read as well as on write. setSearchPort already coerced
+        // out-of-range values, but a value written by an older build (or a
+        // corrupted pref) was loaded verbatim and then interpolated straight into
+        // the http://host:port base URL the search client builds.
         runCatching { prefs.getString(KEY_SEARCH_PORT, null)?.toInt() ?: DEFAULT_SEARCH_PORT }
-            .getOrDefault(DEFAULT_SEARCH_PORT),
+            .getOrDefault(DEFAULT_SEARCH_PORT)
+            .let { if (it in 1..65535) it else DEFAULT_SEARCH_PORT },
     )
     val searchPort: StateFlow<Int> = _searchPort.asStateFlow()
 

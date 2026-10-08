@@ -448,7 +448,11 @@ object BriefMarkdownParser {
                 // nothing the model wrote is thrown away outright.
                 val raw = trimmed.trimStart('#').trim()
                 val canonical = canonicalSection(raw)
-                currentSection = canonical.ifEmpty { canonicalSection(raw) }
+                // A single lookup, not two. This read as if an unrecognised
+                // heading was recovered by a second strategy, but
+                // canonicalSection is deterministic, so the second call provably
+                // returned the same "" and the fallback was dead.
+                currentSection = canonical
                 sections.putIfAbsent(currentSection.ifEmpty { raw.lowercase() }, mutableListOf())
                 continue
             }

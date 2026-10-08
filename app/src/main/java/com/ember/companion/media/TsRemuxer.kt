@@ -1,5 +1,6 @@
 package com.ember.companion.media
 
+import com.ember.companion.core.Diag
 import java.io.BufferedInputStream
 import java.io.BufferedOutputStream
 import java.io.Closeable
@@ -154,6 +155,9 @@ object TsRemuxer {
     private class Muxer(private val out: OutputStream) : Closeable {
 
         private var headerWritten = false
+
+        /** Whether the written moov declared an audio track. Fixed once written. */
+        private var audioDeclared = false
         private var videoSeq = 1
         private var audioSeq = 1
 
@@ -248,6 +252,7 @@ object TsRemuxer {
             if (!audio.hasConfig && video.totalSamples < AUDIO_WAIT_SAMPLE_LIMIT) return
 
             val includeAudio = audio.hasConfig && audio.totalSamples > 0
+            audioDeclared = includeAudio
             out.write(Boxes.ftyp())
             out.write(buildMoov(includeAudio))
             headerWritten = true
@@ -260,8 +265,16 @@ object TsRemuxer {
             if (videoFrag.isNotEmpty()) {
                 writeFragment(trackId = 1, timescale = VIDEO_TIMESCALE, samples = videoFrag, sequence = videoSeq++)
             }
-            if (audioFrag.isNotEmpty() && audio.inTrack) {
+            // Gated on what the moov actually declared, not on whether audio
+            // happens to look available now. Once the header is written a track
+            // is fixed: it has an entry in mvex and a trex. Audio whose config
+            // arrived after the video-only header was emitted therefore has no
+            // trex, and writing fragments for track 2 produced an MP4 no player
+            // would open. Dropping the late audio keeps the file valid.
+            if (audioFrag.isNotEmpty() && audioDeclared) {
                 writeFragment(trackId = 2, timescale = audio.timescale, samples = audioFrag, sequence = audioSeq++)
+            } else if (!audioDeclared && (audio.hasConfig || audio.totalSamples > 0)) {
+                Diag.log("TS remux: audio arrived after the header was written; keeping a video-only file")
             }
             videoFrag.clear()
             audioFrag.clear()
@@ -741,10 +754,6 @@ object TsRemuxer {
         }
 
         /** Discards framing state that no longer describes the elementary stream. */
-        fun dropCarry() {
-            carry = ByteArray(0)
-        }
-
         private fun feedAc3(payload: ByteArray) {
             if (!hasConfig) {
                 hasConfig = true
@@ -1379,16 +1388,14 @@ object TsRemuxer {
             return (high shl 8) or low
         }
 
-        fun bits(count: Int) {
-            position += count
-        }
-
         fun skip(count: Int) {
             position += count
         }
     }
 
-    private class EsInfo(var streamType: Int, var pid: Int)
+    // pid is the map key in `streams`, so carrying it on the value as well was
+    // never read.
+    private class EsInfo(var streamType: Int)
 
     private class TsDemuxer(
         private val onPayload: (streamType: Int, payload: ByteArray, pts: Long?, dts: Long?) -> Unit,
@@ -1399,6 +1406,13 @@ object TsRemuxer {
         private val started = HashSet<Int>()
         private val lastContinuity = HashMap<Int, Int>()
         private var sawDiscontinuity = false
+
+        private fun noteDiscontinuity() {
+            if (!sawDiscontinuity) {
+                sawDiscontinuity = true
+                Diag.log("TS remux: discontinuity indicator or continuity gap in the source stream")
+            }
+        }
 
         private val packet = ByteArray(TS_PACKET_SIZE)
 
@@ -1434,7 +1448,7 @@ object TsRemuxer {
                 // A discontinuity indicator says the stream broke here, which is
                 // the only reliable way to notice a missing segment.
                 val flags = if (adaptationLength > 0) p[5].toInt() and 0xFF else 0
-                if ((flags and 0x80) != 0) sawDiscontinuity = true
+                if ((flags and 0x80) != 0) noteDiscontinuity()
                 offset += 1 + adaptationLength
                 if (offset >= TS_PACKET_SIZE) return
             }
@@ -1452,7 +1466,7 @@ object TsRemuxer {
 
             val previous = lastContinuity[pid]
             if (previous != null && previous != continuityIndex && adaptationControl != 1) {
-                sawDiscontinuity = true
+                noteDiscontinuity()
             }
             lastContinuity[pid] = if (continuityIndex == 0) 0 else (continuityIndex + 1) and 0x0F
 
@@ -1492,7 +1506,7 @@ object TsRemuxer {
                 val elementaryPid = r.u16() and 0x1FFF
                 val esInfoLength = (r.u16() and 0x0FFF).toInt()
                 if (isSupported(streamType) && !streams.containsKey(elementaryPid)) {
-                    streams[elementaryPid] = EsInfo(streamType, elementaryPid)
+                    streams[elementaryPid] = EsInfo(streamType)
                 }
                 r.skip(esInfoLength)
             }
@@ -1529,9 +1543,14 @@ object TsRemuxer {
             }
             if (data.size <= headerBytes) return
             val elementary = data.copyOfRange(headerBytes, data.size)
-            // A discontinuity means a keyframe we have not seen is missing, so
-            // the next sample must be treated as a sync frame or the output
-            // will not decode from that point.
+            // A discontinuity means a keyframe we have not seen is missing.
+            // Sample-splitting is driven by sync NALs alone, so the pending
+            // sample that straddles the gap cannot be repaired here — dropping it
+            // and forcing the next sync NAL to open a fresh sample is the correct
+            // recovery, but it changes decode output and TsRemuxer has no unit
+            // tests, so it is deliberately left undone rather than guessed at.
+            // The flag is logged instead so a download damaged this way can be
+            // identified after the fact.
             onPayload(info.streamType, elementary, pts, dts)
         }
 

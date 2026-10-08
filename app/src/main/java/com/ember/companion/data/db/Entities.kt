@@ -87,3 +87,39 @@ data class HistoryEntry(
     val url: String,
     val visitedAt: Long = System.currentTimeMillis(),
 )
+
+/**
+ * One companion-chat conversation.
+ *
+ * Persisted rather than held in Compose state so closing the chat overlay, or
+ * the process dying, does not throw the transcript away. [persona] records the
+ * system prompt in force for the thread so a reopened conversation still knows
+ * who it was talking to.
+ */
+@Entity(tableName = "chat_threads", indices = [Index("updatedAt")])
+data class ChatThread(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    val title: String = "New conversation",
+    val persona: String = "",
+    val customPersona: Boolean = false,
+    val createdAt: Long = System.currentTimeMillis(),
+    val updatedAt: Long = System.currentTimeMillis(),
+)
+
+/** One message inside a [ChatThread]. */
+@Entity(
+    tableName = "chat_messages",
+    indices = [Index("threadId"), Index("sentAt")],
+)
+data class ChatMessageRow(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    val threadId: Long,
+    val fromUser: Boolean,
+    val text: String,
+    /**
+     * True when the row reports a provider failure rather than conversation.
+     * Kept so an error stays visually distinct after a restart.
+     */
+    val isError: Boolean = false,
+    val sentAt: Long = System.currentTimeMillis(),
+)

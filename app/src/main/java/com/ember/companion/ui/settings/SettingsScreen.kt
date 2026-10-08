@@ -16,7 +16,6 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.Chat
 import androidx.compose.material.icons.automirrored.filled.OpenInNew
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Refresh
@@ -607,46 +606,6 @@ fun SettingsScreen(vm: EmberViewModel, contentPadding: PaddingValues) {
                     }
                     if (lastCrash != null) {
                         DetailLine("Last crash", lastCrash)
-                    }
-                }
-            }
-
-            // ---- companion chat ---------------------------------------------
-            SectionTitle("Companion")
-            Card(
-                colors = CardDefaults.cardColors(
-                    containerColor = MaterialTheme.colorScheme.surface,
-                ),
-                modifier = Modifier.fillMaxWidth(),
-            ) {
-                Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                    Text(
-                        "Companion chat",
-                        style = MaterialTheme.typography.titleSmall,
-                    )
-                    Text(
-                        "A private one-to-one conversation with the same model Ember already " +
-                            "uses for scenario work. Pick a persona or write your own, and the " +
-                            "reply stays on this device apart from the request itself.\n\n" +
-                            "Uses the API key and model set above. The timer in the chat " +
-                            "header is just elapsed time — there is no rate and nothing is billed.",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                    Button(
-                        onClick = { vm.openChat() },
-                        enabled = aiEnabled && aiHasKey,
-                    ) {
-                        Icon(Icons.AutoMirrored.Filled.Chat, null, Modifier.size(18.dp))
-                        Spacer(Modifier.width(8.dp))
-                        Text("Open companion chat")
-                    }
-                    if (!aiHasKey) {
-                        Text(
-                            "Add an API key above to enable chat.",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
                     }
                 }
             }

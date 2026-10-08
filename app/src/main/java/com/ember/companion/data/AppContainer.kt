@@ -5,6 +5,8 @@ import com.ember.companion.core.AiClient
 import com.ember.companion.core.SettingsStore
 import com.ember.companion.core.VpnMonitor
 import com.ember.companion.data.db.BookmarkDao
+import com.ember.companion.data.db.ChatMessageDao
+import com.ember.companion.data.db.ChatThreadDao
 import com.ember.companion.data.db.EmberDatabase
 import com.ember.companion.data.db.HistoryDao
 import com.ember.companion.data.db.MediaDao
@@ -34,6 +36,8 @@ class AppContainer(context: Context) {
     val scenarioDao: ScenarioDao by lazy { db.scenarioDao() }
     val bookmarkDao: BookmarkDao by lazy { db.bookmarkDao() }
     val historyDao: HistoryDao by lazy { db.historyDao() }
+    val chatThreadDao: ChatThreadDao by lazy { db.chatThreadDao() }
+    val chatMessageDao: ChatMessageDao by lazy { db.chatMessageDao() }
 
     companion object {
         /**

@@ -120,3 +120,48 @@ interface HistoryDao {
     @Query("SELECT COUNT(*) FROM history")
     fun observeCount(): Flow<Int>
 }
+
+@Dao
+interface ChatThreadDao {
+
+    @Query("SELECT * FROM chat_threads ORDER BY updatedAt DESC")
+    fun observeAll(): Flow<List<ChatThread>>
+
+    @Query("SELECT * FROM chat_threads WHERE id = :id")
+    suspend fun getById(id: Long): ChatThread?
+
+    /** The most recent conversation, so reopening the chat resumes it. */
+    @Query("SELECT * FROM chat_threads ORDER BY updatedAt DESC LIMIT 1")
+    fun observeMostRecent(): Flow<ChatThread?>
+
+    @Insert(onConflict = OnConflictStrategy.ABORT)
+    suspend fun insert(thread: ChatThread): Long
+
+    @Update
+    suspend fun update(thread: ChatThread)
+
+    @Query("UPDATE chat_threads SET updatedAt = :at WHERE id = :id")
+    suspend fun touch(id: Long, at: Long)
+
+    @Query("DELETE FROM chat_threads WHERE id = :id")
+    suspend fun deleteById(id: Long)
+
+    @Query("DELETE FROM chat_threads")
+    suspend fun clear()
+}
+
+@Dao
+interface ChatMessageDao {
+
+    @Query("SELECT * FROM chat_messages WHERE threadId = :threadId ORDER BY sentAt ASC, id ASC")
+    fun observeForThread(threadId: Long): Flow<List<ChatMessageRow>>
+
+    @Insert(onConflict = OnConflictStrategy.ABORT)
+    suspend fun insert(message: ChatMessageRow): Long
+
+    @Query("DELETE FROM chat_messages WHERE threadId = :threadId")
+    suspend fun clearThread(threadId: Long)
+
+    @Query("DELETE FROM chat_messages")
+    suspend fun clear()
+}

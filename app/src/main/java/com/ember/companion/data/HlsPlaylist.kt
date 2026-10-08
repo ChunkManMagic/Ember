@@ -158,7 +158,15 @@ object HlsPlaylist {
                         val type = attrs["TYPE"].orEmpty()
                         val groupId = attrs["GROUP-ID"].orEmpty()
                         if (type.equals("AUDIO", ignoreCase = true) && groupId.isNotEmpty()) {
-                            audioGroups.getOrPut(groupId) { mutableSetOf() }.add(groupId)
+                            // The set holds the renditions in the group, keyed by
+                            // group id. It used to add groupId to its own set, which
+                            // made the contents meaningless — only containsKey was
+                            // ever read, and the set said nothing about whether a
+                            // real rendition existed behind the group.
+                            val name = attrs["NAME"].orEmpty().ifBlank { attrs["URI"].orEmpty() }
+                            if (name.isNotEmpty()) {
+                                audioGroups.getOrPut(groupId) { mutableSetOf() }.add(name)
+                            }
                         }
                     }
 
@@ -231,9 +239,11 @@ object HlsPlaylist {
                     bandwidth = attrs["BANDWIDTH"]?.trim()?.toDoubleOrNull()?.toInt() ?: 0,
                     resolution = resolution,
                     codecs = attrs["CODECS"].orEmpty(),
-                    // A variant is only worth preferring if its audio group has
-                    // a real track behind it; a dangling group means silence.
-                    audioGroupIds = if (audioGroup.isNotEmpty() && audioGroups.containsKey(audioGroup)) {
+                    // Only recorded when the group actually lists a rendition. A dangling
+                    // AUDIO group names audio that does not exist behind it.
+                    audioGroupIds = if (audioGroup.isNotEmpty() &&
+                        audioGroups[audioGroup].orEmpty().isNotEmpty()
+                    ) {
                         listOf(audioGroup)
                     } else {
                         emptyList()
@@ -296,13 +306,18 @@ object HlsPlaylist {
      * what a player would pick and what the user sees advertised on the page.
      * Playlists that state neither fall back to the last entry, which by
      * convention is the highest quality.
+     *
+     * A variant whose audio lives in a separate rendition is deprioritised, not
+     * preferred. HlsDownloader only ever fetches the variant URL, so choosing a
+     * split-audio variant over an equally-sized muxed one produced a download
+     * with no audio track at all.
      */
     fun bestVariant(master: Parsed.Master): Variant? {
         if (master.variants.isEmpty()) return null
         return master.variants.maxWithOrNull(
             compareBy<Variant> { it.pixelCount }
                 .thenBy { it.bandwidth }
-                .thenBy { it.audioGroupIds.isNotEmpty() },
+                .thenBy { !it.audioGroupIds.isNotEmpty() },
         )
     }
 
