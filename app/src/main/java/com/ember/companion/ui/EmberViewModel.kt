@@ -1182,6 +1182,7 @@ fun saveVeniceImage(context: android.content.Context) {
                         }
                     }
                     showMessage("Saved $fileName")
+                    importUris(container.appContext, listOf(Uri.fromFile(output)))
                 }
 
                 is HlsDownloader.Outcome.Failure -> {
@@ -3938,7 +3939,26 @@ fun saveVeniceImage(context: android.content.Context) {
         val dm = container.appContext.getSystemService(Context.DOWNLOAD_SERVICE) as? DownloadManager ?: return
         val current = _downloads.value
         if (current.isEmpty()) return
-        _downloads.value = current.map { entry -> readDownloadState(dm, entry) }
+
+        var justFinished = emptyList<DownloadEntry>()
+        _downloads.value = current.map { entry -> 
+            val updated = readDownloadState(dm, entry)
+            if (entry.state != DownloadState.SUCCESS && updated.state == DownloadState.SUCCESS) {
+                justFinished = justFinished + updated
+            }
+            updated
+        }
+
+        if (justFinished.isNotEmpty()) {
+            val destDir = File(
+                Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS),
+                "Ember"
+            )
+            val uris = justFinished.map { entry ->
+                Uri.fromFile(File(destDir, entry.fileName))
+            }
+            importUris(container.appContext, uris)
+        }
     }
 
     private fun readDownloadState(dm: DownloadManager, entry: DownloadEntry): DownloadEntry {

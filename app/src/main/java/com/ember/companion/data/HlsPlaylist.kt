@@ -315,9 +315,9 @@ object HlsPlaylist {
     fun bestVariant(master: Parsed.Master): Variant? {
         if (master.variants.isEmpty()) return null
         return master.variants.maxWithOrNull(
-            compareBy<Variant> { it.pixelCount }
-                .thenBy { it.bandwidth }
-                .thenBy { !it.audioGroupIds.isNotEmpty() },
+            compareBy<Variant> { !it.audioGroupIds.isNotEmpty() }
+                .thenBy { it.pixelCount }
+                .thenBy { it.bandwidth },
         )
     }
 
